@@ -1,1330 +1,3460 @@
---[[
-    Misty_Dany Hub | Blood Zone V10 (Joystick Fly + Persistent)
-    - Полёт по джойстику телефона (MoveDirection)
-    - Автосохранение всех настроек в файл
-    - 6 вкладок: Бой / Движ / Друзья / Фичи / Игрок / Игроки
---]]
+-- ╔══════════════════════════════════════════════════════════════╗
+-- ║       🌙 MISTY_DANY HUB v3.1  |  by Danil  🌙              ║
+-- ║          Professional Slap Battles Client  ✨                ║
+-- ╚══════════════════════════════════════════════════════════════╝
 
-local Players = game:GetService("Players")
-local RunService = game:GetService("RunService")
+local Rayfield = loadstring(game:HttpGet('https://sirius.menu/rayfield'))()
+
+-- ════════════════════════════════════════════════════════════════
+--  СЕРВИСЫ
+-- ════════════════════════════════════════════════════════════════
+local Players          = game:GetService("Players")
+local RunService       = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
-local Workspace = game:GetService("Workspace")
-local SoundService = game:GetService("SoundService")
-local Debris = game:GetService("Debris")
-local HttpService = game:GetService("HttpService")
+local TweenService     = game:GetService("TweenService")
+local Lighting         = game:GetService("Lighting")
+local StarterGui       = game:GetService("StarterGui")
+local lp               = Players.LocalPlayer
+local cam              = workspace.CurrentCamera
 
-local LocalPlayer = Players.LocalPlayer
-local Camera = Workspace.CurrentCamera
+-- ════════════════════════════════════════════════════════════════
+--  ГЛОБАЛЬНЫЕ ПЕРЕМЕННЫЕ
+-- ════════════════════════════════════════════════════════════════
+local flyEnabled       = false
+local flySpeed         = 50
+local noclipEnabled    = false
+local platformEnabled  = false
+local platform         = nil
+local antiAfkConn      = nil
+local antiAfkEnabled   = true
+local speedhackVal     = 20
+local jumpVal          = 50
+local infiniteJumpConn = nil
+local ghostEnabled     = false
+local fovCircle        = nil
+local savedPositions   = {}    -- слоты сохранённых позиций
+local noclipConn       = nil
 
---------------------------------------------------------------------------------
--- 💾 СИСТЕМА СОХРАНЕНИЯ
---------------------------------------------------------------------------------
-local CONFIG_FILE = "MistyDany_BloodZone_Config.json"
+-- ESP
+local espEnabled       = false
+local espHighlight     = true
+local espBoxes         = false
+local espLines         = false
+local espNames         = true
+local espDist          = true
+local espHealth        = true
+local espObjects       = {}
+local espFolder        = Instance.new("Folder", game.CoreGui)
+espFolder.Name         = "MistyESP_v3"
+local espConn          = nil
 
-local Settings = {
-    ESP = true, Aimbot = true, AutoShoot = true,
-    TargetPart = "Head",
-    AutoLock = false,
-    FOVRadius = 40,
-    Fly = false, FlySpeed = 55,
-    Noclip = false, ClickTP = false,
-    FreeCam = false, Crosshair = false,
-    AutoSprint = false, AutoSprintSpeed = 28,
-    HitSound = false,
-    InfiniteJump = false, JumpPower = 50,
-    WalkSpeed = 16,
-    Friends = {},
-    UIPosition = {0.5, -210, 0.25, -235},
-    UISize = {420, 470},
-    LockedTarget = nil, IsRMBDown = false,
-    UIVisible = true,
-    SelectedPlayer = nil, Spectating = nil
-}
+-- Визуальные
+local originalFOV      = cam.FieldOfView
+local fullbrightActive = false
+local origAmbient      = Lighting.Ambient
+local origBrightness   = Lighting.Brightness
+local origFogEnd       = Lighting.FogEnd
+local thirdPersonDist  = 12
 
-local RUNTIME_FIELDS = {
-    LockedTarget = true, IsRMBDown = true, UIVisible = true,
-    SelectedPlayer = true, Spectating = true
-}
+-- ════════════════════════════════════════════════════════════════
+--  ОКНО С СИСТЕМОЙ КЛЮЧЕЙ
+-- ════════════════════════════════════════════════════════════════
+local Window = Rayfield:CreateWindow({
+   Name             = "🌙 Misty_Dany Hub  v3.1  |  Slap Battles",
+   LoadingTitle     = "🌙 MistyDany Hub",
+   LoadingSubtitle  = "✨ v3.1  |  by Danil",
+   ConfigurationSaving = {
+      Enabled    = true,
+      FolderName = "MistyDanyConfig",
+      FileName   = "HubV3"
+   },
+   KeySystem = false
+})
 
-local hasFileAPI = (writefile and readfile and isfile)
-
-local function SaveConfig()
-    if not hasFileAPI then return end
-    local data = {}
-    for k, v in pairs(Settings) do
-        if not RUNTIME_FIELDS[k] then data[k] = v end
-    end
-    if MainFrame then
-        local p = MainFrame.Position
-        local s = MainFrame.Size
-        data.UIPosition = {p.X.Scale, p.X.Offset, p.Y.Scale, p.Y.Offset}
-        data.UISize = {s.X.Offset, s.Y.Offset}
-    end
-    local ok, encoded = pcall(function() return HttpService:JSONEncode(data) end)
-    if ok then pcall(writefile, CONFIG_FILE, encoded) end
+-- ════════════════════════════════════════════════════════════════
+--  УТИЛИТЫ
+-- ════════════════════════════════════════════════════════════════
+local function notify(title, body, dur)
+   Rayfield:Notify({ Title = title, Content = body, Duration = dur or 3 })
 end
 
-local function LoadConfig()
-    if not hasFileAPI then return end
-    if not isfile(CONFIG_FILE) then return end
-    local ok, content = pcall(readfile, CONFIG_FILE)
-    if not ok or not content or content == "" then return end
-    local decodeOk, data = pcall(function() return HttpService:JSONDecode(content) end)
-    if not decodeOk or type(data) ~= "table" then return end
-    for k, v in pairs(data) do
-        if not RUNTIME_FIELDS[k] and Settings[k] ~= nil then
-            Settings[k] = v
-        end
-    end
+local function getChar()
+   return lp.Character
 end
 
-LoadConfig()
-
-local saveScheduled = false
-local function RequestSave()
-    if saveScheduled then return end
-    saveScheduled = true
-    task.delay(1, function()
-        saveScheduled = false
-        SaveConfig()
-    end)
+local function getHRP()
+   local c = getChar()
+   return c and c:FindFirstChild("HumanoidRootPart")
 end
 
-task.spawn(function()
-    while true do
-        task.wait(10)
-        SaveConfig()
-    end
-end)
-
---------------------------------------------------------------------------------
--- GUI ROOT
---------------------------------------------------------------------------------
-local ScreenGui = Instance.new("ScreenGui")
-ScreenGui.Name = "MistyDany_BloodZone_V10"
-ScreenGui.ResetOnSpawn = false
-ScreenGui.IgnoreGuiInset = true
-
-pcall(function()
-    if gethui then ScreenGui.Parent = gethui()
-    elseif syn and syn.protect_gui then syn.protect_gui(ScreenGui); ScreenGui.Parent = game:GetService("CoreGui")
-    else ScreenGui.Parent = game:GetService("CoreGui") end
-end)
-if not ScreenGui.Parent then ScreenGui.Parent = LocalPlayer:WaitForChild("PlayerGui") end
-
--- Плавающая кнопка "M"
-local ToggleBtn = Instance.new("TextButton")
-ToggleBtn.Size = UDim2.new(0, 46, 0, 46)
-ToggleBtn.Position = UDim2.new(1, -60, 0, 80)
-ToggleBtn.BackgroundColor3 = Color3.fromRGB(180, 30, 45)
-ToggleBtn.Text = "M"
-ToggleBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
-ToggleBtn.Font = Enum.Font.GothamBold
-ToggleBtn.TextSize = 20
-ToggleBtn.AutoButtonColor = false
-ToggleBtn.Parent = ScreenGui
-Instance.new("UICorner", ToggleBtn).CornerRadius = UDim.new(1, 0)
-local ToggleStroke = Instance.new("UIStroke", ToggleBtn)
-ToggleStroke.Color = Color3.fromRGB(255, 255, 255); ToggleStroke.Thickness = 1.5
-
--- Плавающая кнопка "LOCK"
-local LockBtn = Instance.new("TextButton")
-LockBtn.Size = UDim2.new(0, 46, 0, 46)
-LockBtn.Position = UDim2.new(1, -60, 0, 136)
-LockBtn.BackgroundColor3 = Settings.AutoLock and Color3.fromRGB(0, 180, 80) or Color3.fromRGB(60, 60, 70)
-LockBtn.Text = "🔒"
-LockBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
-LockBtn.Font = Enum.Font.GothamBold
-LockBtn.TextSize = 20
-LockBtn.AutoButtonColor = false
-LockBtn.Parent = ScreenGui
-Instance.new("UICorner", LockBtn).CornerRadius = UDim.new(1, 0)
-local LockStroke = Instance.new("UIStroke", LockBtn)
-LockStroke.Color = Color3.fromRGB(255, 255, 255); LockStroke.Thickness = 1.5
-
--- Главное окно
-local MainFrame = Instance.new("Frame")
-MainFrame.Size = UDim2.new(0, Settings.UISize[1], 0, Settings.UISize[2])
-MainFrame.Position = UDim2.new(
-    Settings.UIPosition[1], Settings.UIPosition[2],
-    Settings.UIPosition[3], Settings.UIPosition[4]
-)
-MainFrame.BackgroundColor3 = Color3.fromRGB(18, 18, 24)
-MainFrame.BorderSizePixel = 0
-MainFrame.ClipsDescendants = true
-MainFrame.Parent = ScreenGui
-Instance.new("UICorner", MainFrame).CornerRadius = UDim.new(0, 8)
-local MainStroke = Instance.new("UIStroke", MainFrame)
-MainStroke.Color = Color3.fromRGB(220, 35, 55); MainStroke.Thickness = 2
-
-local Header = Instance.new("Frame", MainFrame)
-Header.Size = UDim2.new(1, 0, 0, 36)
-Header.BackgroundColor3 = Color3.fromRGB(28, 28, 36)
-Header.BorderSizePixel = 0
-Instance.new("UICorner", Header).CornerRadius = UDim.new(0, 8)
-
-local Title = Instance.new("TextLabel", Header)
-Title.Size = UDim2.new(1, -80, 1, 0)
-Title.Position = UDim2.new(0, 12, 0, 0)
-Title.BackgroundTransparency = 1
-Title.Text = "Misty_Dany Hub | Blood Zone V10"
-Title.TextColor3 = Color3.fromRGB(240, 240, 240)
-Title.TextSize = 13
-Title.Font = Enum.Font.GothamBold
-Title.TextXAlignment = Enum.TextXAlignment.Left
-
-local CloseBtn = Instance.new("TextButton", Header)
-CloseBtn.Size = UDim2.new(0, 26, 0, 26)
-CloseBtn.Position = UDim2.new(1, -32, 0.5, -13)
-CloseBtn.BackgroundColor3 = Color3.fromRGB(50, 50, 60)
-CloseBtn.Text = "X"
-CloseBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
-CloseBtn.Font = Enum.Font.GothamBold
-CloseBtn.TextSize = 13
-CloseBtn.AutoButtonColor = false
-Instance.new("UICorner", CloseBtn).CornerRadius = UDim.new(0, 6)
-
-local ResizeBtn = Instance.new("TextButton", MainFrame)
-ResizeBtn.Size = UDim2.new(0, 18, 0, 18)
-ResizeBtn.Position = UDim2.new(1, -18, 1, -18)
-ResizeBtn.BackgroundTransparency = 1
-ResizeBtn.Text = "◢"
-ResizeBtn.TextColor3 = Color3.fromRGB(220, 35, 55)
-ResizeBtn.TextSize = 14
-ResizeBtn.Font = Enum.Font.GothamBold
-
-local TabBar = Instance.new("Frame", MainFrame)
-TabBar.Size = UDim2.new(1, -20, 0, 30)
-TabBar.Position = UDim2.new(0, 10, 0, 42)
-TabBar.BackgroundTransparency = 1
-local TabLayout = Instance.new("UIListLayout", TabBar)
-TabLayout.FillDirection = Enum.FillDirection.Horizontal
-TabLayout.Padding = UDim.new(0, 4)
-TabLayout.SortOrder = Enum.SortOrder.LayoutOrder
-
-local Content = Instance.new("Frame", MainFrame)
-Content.Size = UDim2.new(1, -20, 1, -86)
-Content.Position = UDim2.new(0, 10, 0, 78)
-Content.BackgroundTransparency = 1
-Content.ClipsDescendants = true
-
-local Tabs, TabButtons = {}, {}
-local CurrentTab
-
-local function SwitchTab(name)
-    for n, f in pairs(Tabs) do f.Visible = (n == name) end
-    for n, b in pairs(TabButtons) do
-        b.BackgroundColor3 = (n == name) and Color3.fromRGB(180, 30, 45) or Color3.fromRGB(32, 32, 42)
-    end
-    CurrentTab = name
+local function getHum()
+   local c = getChar()
+   return c and c:FindFirstChildOfClass("Humanoid")
 end
 
-local function CreateTab(name, label)
-    local btn = Instance.new("TextButton", TabBar)
-    btn.Size = UDim2.new(0, 60, 1, 0)
-    btn.BackgroundColor3 = Color3.fromRGB(32, 32, 42)
-    btn.Text = label
-    btn.TextColor3 = Color3.fromRGB(255, 255, 255)
-    btn.Font = Enum.Font.GothamSemibold
-    btn.TextSize = 11
-    btn.AutoButtonColor = false
-    Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 6)
-    btn.MouseButton1Click:Connect(function() SwitchTab(name) end)
-    TabButtons[name] = btn
-
-    local frame = Instance.new("ScrollingFrame", Content)
-    frame.Size = UDim2.new(1, 0, 1, 0)
-    frame.BackgroundTransparency = 1
-    frame.BorderSizePixel = 0
-    frame.ScrollBarThickness = 4
-    frame.CanvasSize = UDim2.new(0, 0, 0, 0)
-    frame.Visible = false
-    local list = Instance.new("UIListLayout", frame)
-    list.Padding = UDim.new(0, 8)
-    list.SortOrder = Enum.SortOrder.LayoutOrder
-    list:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
-        frame.CanvasSize = UDim2.new(0, 0, 0, list.AbsoluteContentSize.Y + 8)
-    end)
-    Tabs[name] = frame
-    return frame
+local function playerColor(p)
+   if p.Team and lp.Team then
+      return p.Team == lp.Team and Color3.fromRGB(60,220,90) or Color3.fromRGB(255,60,60)
+   end
+   return Color3.fromRGB(255,195,0)
 end
 
-local CombatTab  = CreateTab("Combat",  "Бой")
-local MoveTab    = CreateTab("Move",    "Движ")
-local FriendsTab = CreateTab("Friends", "Друзья")
-local FeatTab    = CreateTab("Feature", "Фичи")
-local PlayerTab  = CreateTab("Player",  "Игрок")
-local PlayersTab = CreateTab("Players", "Игроки")
-SwitchTab("Combat")
-
---------------------------------------------------------------------------------
--- DRAG / RESIZE
---------------------------------------------------------------------------------
-local function IsPointerOverInteractive(pos)
-    local ok, objs = pcall(function()
-        return ScreenGui:GetGuiObjectsAtPosition(pos.X, pos.Y)
-    end)
-    if not ok or not objs then return false end
-    for _, o in ipairs(objs) do
-        if o:IsA("GuiButton") or o:IsA("TextBox") then
-            return true
-        end
-    end
-    return false
+local function worldToScreen(pos)
+   local s, onScreen = cam:WorldToViewportPoint(pos)
+   return Vector2.new(s.X, s.Y), s.Z > 0 and onScreen
 end
 
-local function EnableDrag(header, frame)
-    local dragging, dragStart, startPos
+-- ════════════════════════════════════════════════════════════════
+--  ██  ESP  ████████████████████████████████████████████████████
+-- ════════════════════════════════════════════════════════════════
 
-    local function startDrag(input)
-        if input.UserInputType ~= Enum.UserInputType.MouseButton1
-        and input.UserInputType ~= Enum.UserInputType.Touch then return end
-        if IsPointerOverInteractive(input.Position) then return end
-        dragging = true
-        dragStart = input.Position
-        startPos = frame.Position
-    end
+local function getCharAABB(char)
+   local mn = Vector3.new(math.huge, math.huge, math.huge)
+   local mx = Vector3.new(-math.huge,-math.huge,-math.huge)
+   for _, p in ipairs(char:GetDescendants()) do
+      if p:IsA("BasePart") and p.Name ~= "HumanoidRootPart" then
+         local h = p.Size / 2
+         mn = Vector3.new(math.min(mn.X, p.Position.X-h.X), math.min(mn.Y, p.Position.Y-h.Y), math.min(mn.Z, p.Position.Z-h.Z))
+         mx = Vector3.new(math.max(mx.X, p.Position.X+h.X), math.max(mx.Y, p.Position.Y+h.Y), math.max(mx.Z, p.Position.Z+h.Z))
+      end
+   end
+   return mn, mx
+end
 
-    local function stopDrag(input)
-        if input.UserInputType == Enum.UserInputType.MouseButton1
-        or input.UserInputType == Enum.UserInputType.Touch then
-            dragging = false
-            RequestSave()
-        end
-    end
+local function buildESP(player)
+   if player == lp or espObjects[player] then return end
 
-    header.InputBegan:Connect(startDrag)
-    frame.InputBegan:Connect(startDrag)
-    header.InputEnded:Connect(stopDrag)
-    frame.InputEnded:Connect(stopDrag)
+   -- Highlight (сквозь стены)
+   local hl = Instance.new("Highlight")
+   hl.DepthMode           = Enum.HighlightDepthMode.AlwaysOnTop
+   hl.FillTransparency    = 0.5
+   hl.OutlineTransparency = 0
+   hl.Enabled             = false
 
-    UserInputService.InputChanged:Connect(function(input)
-        if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement
-        or input.UserInputType == Enum.UserInputType.Touch) then
-            local d = input.Position - dragStart
-            frame.Position = UDim2.new(
-                startPos.X.Scale, startPos.X.Offset + d.X,
-                startPos.Y.Scale, startPos.Y.Offset + d.Y
+   -- Billboard
+   local bb = Instance.new("BillboardGui")
+   bb.AlwaysOnTop  = true
+   bb.Size         = UDim2.new(0, 200, 0, 70)
+   bb.StudsOffset  = Vector3.new(0, 3.5, 0)
+   bb.Enabled      = false
+
+   -- Имя
+   local nameLbl = Instance.new("TextLabel", bb)
+   nameLbl.Size = UDim2.new(1,0,0,22)
+   nameLbl.Position = UDim2.new(0,0,0,0)
+   nameLbl.BackgroundTransparency = 1
+   nameLbl.Font = Enum.Font.GothamBold
+   nameLbl.TextSize = 14
+   nameLbl.TextStrokeTransparency = 0.3
+   nameLbl.TextStrokeColor3 = Color3.new(0,0,0)
+
+   -- HP bar фон
+   local hpBg = Instance.new("Frame", bb)
+   hpBg.Size = UDim2.new(1,0,0,6)
+   hpBg.Position = UDim2.new(0,0,0,24)
+   hpBg.BackgroundColor3 = Color3.fromRGB(30,30,30)
+   hpBg.BorderSizePixel = 0
+   Instance.new("UICorner", hpBg).CornerRadius = UDim.new(1,0)
+
+   local hpBar = Instance.new("Frame", hpBg)
+   hpBar.Size = UDim2.new(1,0,1,0)
+   hpBar.BackgroundColor3 = Color3.fromRGB(80,220,80)
+   hpBar.BorderSizePixel = 0
+   Instance.new("UICorner", hpBar).CornerRadius = UDim.new(1,0)
+
+   -- Дистанция
+   local distLbl = Instance.new("TextLabel", bb)
+   distLbl.Size = UDim2.new(1,0,0,16)
+   distLbl.Position = UDim2.new(0,0,0,34)
+   distLbl.BackgroundTransparency = 1
+   distLbl.Font = Enum.Font.Gotham
+   distLbl.TextSize = 12
+   distLbl.TextColor3 = Color3.fromRGB(200,200,200)
+   distLbl.TextStrokeTransparency = 0.4
+   distLbl.TextStrokeColor3 = Color3.new(0,0,0)
+
+   -- Drawing линия (правильный способ для ESP линий)
+   local lineD = Drawing.new("Line")
+   lineD.Thickness = 1.5
+   lineD.Color     = Color3.fromRGB(255,195,0)
+   lineD.Visible   = false
+   lineD.ZIndex    = 5
+
+   -- Drawing боксы (4 линии = прямоугольник)
+   local boxLines = {}
+   for i = 1,4 do
+      local bl = Drawing.new("Line")
+      bl.Thickness = 1.5
+      bl.Color     = Color3.fromRGB(255,195,0)
+      bl.Visible   = false
+      bl.ZIndex    = 5
+      boxLines[i]  = bl
+   end
+
+   espObjects[player] = {
+      hl=hl, bb=bb, nameLbl=nameLbl, hpBar=hpBar, hpBg=hpBg,
+      distLbl=distLbl,
+      lineD=lineD,
+      boxLines=boxLines,
+   }
+
+   local function attach(char)
+      local obj = espObjects[player]
+      if not obj then return end
+      obj.hl.Parent = char
+      local hrp = char:WaitForChild("HumanoidRootPart", 5)
+      if hrp then
+         obj.bb.Adornee = hrp
+         obj.bb.Parent  = hrp
+      end
+   end
+
+   if player.Character then attach(player.Character) end
+   player.CharacterAdded:Connect(attach)
+end
+
+local function removeESP(player)
+   local o = espObjects[player]
+   if not o then return end
+   pcall(function() o.hl:Destroy() end)
+   pcall(function() o.bb:Destroy() end)
+   pcall(function() o.lineD:Remove() end)
+   for _,bl in ipairs(o.boxLines or {}) do pcall(function() bl:Remove() end) end
+   espObjects[player] = nil
+end
+
+-- Drawing API — единственный правильный способ рисовать линии ESP
+local function setDrawLine(dl, a, b, col)
+   dl.From    = a
+   dl.To      = b
+   dl.Color   = col
+   dl.Visible = true
+end
+
+-- box: TL, TR, BR, BL → 4 линии
+local function setDrawBox(bls, tl, br, col)
+   local tr = Vector2.new(br.X, tl.Y)
+   local bl = Vector2.new(tl.X, br.Y)
+   setDrawLine(bls[1], tl, tr, col)  -- верх
+   setDrawLine(bls[2], bl, br, col)  -- низ
+   setDrawLine(bls[3], tl, bl, col)  -- левый
+   setDrawLine(bls[4], tr, br, col)  -- правый
+end
+
+local function startESP()
+   if espConn then espConn:Disconnect() end
+   espConn = RunService.RenderStepped:Connect(function()
+      if not espEnabled then return end
+      local myHRP = getHRP()
+      local vp = cam.ViewportSize
+      -- Линия от моего персонажа (ноги), проецированного на экран
+      -- Если персонаж не виден — fallback на низ экрана
+      local bot
+      if myHRP then
+         local myFeet = myHRP.Position - Vector3.new(0, 3, 0)
+         local s, onS = cam:WorldToViewportPoint(myFeet)
+         if onS and s.Z > 0 then
+            bot = Vector2.new(s.X, s.Y)
+         else
+            bot = Vector2.new(vp.X / 2, vp.Y)
+         end
+      else
+         bot = Vector2.new(vp.X / 2, vp.Y)
+      end
+
+      for player, o in pairs(espObjects) do
+         local char = player.Character
+         local hrp  = char and char:FindFirstChild("HumanoidRootPart")
+         local hum  = char and char:FindFirstChildOfClass("Humanoid")
+
+         if hrp and hum and hum.Health > 0 then
+            local col = playerColor(player)
+            local dist = myHRP and math.floor((myHRP.Position-hrp.Position).Magnitude) or 0
+            local hpPct = hum.Health / math.max(hum.MaxHealth, 1)
+
+            -- Цвет HP бара (зелёный → красный)
+            o.hpBar.BackgroundColor3 = Color3.fromRGB(
+               math.floor((1-hpPct)*220),
+               math.floor(hpPct*220),
+               50
             )
-        end
-    end)
-end
-EnableDrag(Header, MainFrame)
+            o.hpBar.Size = UDim2.new(hpPct,0,1,0)
 
-local resizing, resizeStart, startSize
-ResizeBtn.InputBegan:Connect(function(input)
-    if input.UserInputType == Enum.UserInputType.MouseButton1
-       or input.UserInputType == Enum.UserInputType.Touch then
-        resizing = true; resizeStart = input.Position; startSize = MainFrame.Size
-    end
-end)
-ResizeBtn.InputEnded:Connect(function(input)
-    if input.UserInputType == Enum.UserInputType.MouseButton1
-       or input.UserInputType == Enum.UserInputType.Touch then
-        resizing = false
-        RequestSave()
-    end
-end)
-UserInputService.InputChanged:Connect(function(input)
-    if resizing and (input.UserInputType == Enum.UserInputType.MouseMovement
-       or input.UserInputType == Enum.UserInputType.Touch) then
-        local d = input.Position - resizeStart
-        MainFrame.Size = UDim2.new(0, math.max(400, startSize.X.Offset + d.X),
-                                    0, math.max(320, startSize.Y.Offset + d.Y))
-    end
-end)
+            -- Highlight
+            o.hl.Enabled = espEnabled and espHighlight
+            o.hl.FillColor = col
+            o.hl.OutlineColor = Color3.new(1,1,1)
 
---------------------------------------------------------------------------------
--- UI HELPERS
---------------------------------------------------------------------------------
-local function CreateToggle(parent, text, state, callback)
-    local Btn = Instance.new("TextButton", parent)
-    Btn.Size = UDim2.new(1, -8, 0, 36)
-    Btn.BackgroundColor3 = state and Color3.fromRGB(180, 30, 45) or Color3.fromRGB(32, 32, 42)
-    Btn.Text = "  " .. text .. ": " .. (state and "ON" or "OFF")
-    Btn.TextColor3 = Color3.fromRGB(255, 255, 255)
-    Btn.Font = Enum.Font.GothamSemibold
-    Btn.TextSize = 13
-    Btn.TextXAlignment = Enum.TextXAlignment.Left
-    Btn.AutoButtonColor = false
-    Instance.new("UICorner", Btn).CornerRadius = UDim.new(0, 6)
-    local setState
-    setState = function(v)
-        state = v
-        Btn.BackgroundColor3 = state and Color3.fromRGB(180, 30, 45) or Color3.fromRGB(32, 32, 42)
-        Btn.Text = "  " .. text .. ": " .. (state and "ON" or "OFF")
-    end
-    Btn.MouseButton1Click:Connect(function()
-        setState(not state)
-        callback(state)
-        RequestSave()
-    end)
-    return Btn, setState
-end
+            -- Billboard
+            o.bb.Enabled = espEnabled and espNames
+            o.nameLbl.Text = player.DisplayName
+            o.nameLbl.TextColor3 = col
+            o.hpBg.Visible = espHealth
+            o.distLbl.Text = espDist and (tostring(dist).." м") or ""
+            o.distLbl.Visible = espDist
 
-local function CreateAction(parent, text, callback)
-    local Btn = Instance.new("TextButton", parent)
-    Btn.Size = UDim2.new(1, -8, 0, 36)
-    Btn.BackgroundColor3 = Color3.fromRGB(60, 60, 75)
-    Btn.Text = "  " .. text
-    Btn.TextColor3 = Color3.fromRGB(255, 255, 255)
-    Btn.Font = Enum.Font.GothamSemibold
-    Btn.TextSize = 13
-    Btn.TextXAlignment = Enum.TextXAlignment.Left
-    Btn.AutoButtonColor = false
-    Instance.new("UICorner", Btn).CornerRadius = UDim.new(0, 6)
-    Btn.MouseButton1Click:Connect(callback)
-    return Btn
+            -- Линия (Drawing API — точная, без багов с rotation)
+            local sc, onS = worldToScreen(hrp.Position)
+            if espLines and onS then
+               setDrawLine(o.lineD, bot, sc, col)
+            else
+               o.lineD.Visible = false
+            end
+
+            -- Бокс (Drawing API — 4 линии по углам хитбокса)
+            if espBoxes then
+               local mn, mx = getCharAABB(char)
+               -- Проецируем только нужные 4 угла (top-left, top-right, bot-left, bot-right)
+               local pTL, onTL = worldToScreen(Vector3.new(mn.X, mx.Y, mn.Z))
+               local pTR, onTR = worldToScreen(Vector3.new(mx.X, mx.Y, mn.Z))
+               local pBL, onBL = worldToScreen(Vector3.new(mn.X, mn.Y, mn.Z))
+               local pBR, onBR = worldToScreen(Vector3.new(mx.X, mn.Y, mn.Z))
+               -- Берём крайние X/Y чтобы бокс не зависел от угла камеры
+               local scMinX = math.min(pTL.X, pTR.X, pBL.X, pBR.X)
+               local scMinY = math.min(pTL.Y, pTR.Y, pBL.Y, pBR.Y)
+               local scMaxX = math.max(pTL.X, pTR.X, pBL.X, pBR.X)
+               local scMaxY = math.max(pTL.Y, pTR.Y, pBL.Y, pBR.Y)
+               if onS then
+                  setDrawBox(o.boxLines, Vector2.new(scMinX, scMinY), Vector2.new(scMaxX, scMaxY), col)
+               else
+                  for _,bl in ipairs(o.boxLines) do bl.Visible = false end
+               end
+            else
+               for _,bl in ipairs(o.boxLines) do bl.Visible = false end
+            end
+         else
+            -- Персонаж мёртв или не загружен — скрываем всё
+            o.hl.Enabled = false
+            o.bb.Enabled = false
+            o.lineD.Visible = false
+            for _,bl in ipairs(o.boxLines) do bl.Visible = false end
+         end
+      end
+   end)
 end
 
-local function CreateNumber(parent, text, defaultValue, callback)
-    local c = Instance.new("Frame", parent)
-    c.Size = UDim2.new(1, -8, 0, 36)
-    c.BackgroundColor3 = Color3.fromRGB(28, 28, 36)
-    c.BorderSizePixel = 0
-    Instance.new("UICorner", c).CornerRadius = UDim.new(0, 6)
-    local lbl = Instance.new("TextLabel", c)
-    lbl.Size = UDim2.new(0.55, 0, 1, 0)
-    lbl.Position = UDim2.new(0, 10, 0, 0)
-    lbl.BackgroundTransparency = 1
-    lbl.Text = text
-    lbl.TextColor3 = Color3.fromRGB(230, 230, 230)
-    lbl.Font = Enum.Font.GothamSemibold
-    lbl.TextSize = 12
-    lbl.TextXAlignment = Enum.TextXAlignment.Left
-    local box = Instance.new("TextBox", c)
-    box.Size = UDim2.new(0.38, -6, 0, 24)
-    box.Position = UDim2.new(0.60, 0, 0.5, -12)
-    box.BackgroundColor3 = Color3.fromRGB(48, 48, 60)
-    box.Text = tostring(defaultValue)
-    box.TextColor3 = Color3.fromRGB(255, 255, 255)
-    box.Font = Enum.Font.Gotham
-    box.TextSize = 12
-    box.ClearTextOnFocus = false
-    Instance.new("UICorner", box).CornerRadius = UDim.new(0, 4)
-    box.FocusLost:Connect(function()
-        local n = tonumber(box.Text)
-        if n then callback(n); RequestSave() else box.Text = tostring(defaultValue) end
-    end)
-    return box
+local function stopESP()
+   if espConn then espConn:Disconnect(); espConn=nil end
+   for _,o in pairs(espObjects) do
+      o.hl.Enabled = false
+      o.bb.Enabled = false
+      o.lineD.Visible = false
+      for _,bl in ipairs(o.boxLines or {}) do bl.Visible = false end
+   end
 end
 
-local function CreateSlider(parent, text, min, max, defaultValue, callback)
-    local frame = Instance.new("Frame", parent)
-    frame.Size = UDim2.new(1, -8, 0, 50)
-    frame.BackgroundColor3 = Color3.fromRGB(28, 28, 36)
-    frame.BorderSizePixel = 0
-    Instance.new("UICorner", frame).CornerRadius = UDim.new(0, 6)
-    local label = Instance.new("TextLabel", frame)
-    label.Size = UDim2.new(1, -16, 0, 18)
-    label.Position = UDim2.new(0, 10, 0, 4)
-    label.BackgroundTransparency = 1
-    label.Text = text .. ": " .. defaultValue
-    label.TextColor3 = Color3.fromRGB(230, 230, 230)
-    label.Font = Enum.Font.GothamSemibold
-    label.TextSize = 11
-    label.TextXAlignment = Enum.TextXAlignment.Left
-    local back = Instance.new("TextButton", frame)
-    back.Text = ""
-    back.AutoButtonColor = false
-    back.Size = UDim2.new(1, -20, 0, 8)
-    back.Position = UDim2.new(0, 10, 0, 30)
-    back.BackgroundColor3 = Color3.fromRGB(20, 20, 28)
-    back.BorderSizePixel = 0
-    Instance.new("UICorner", back).CornerRadius = UDim.new(0, 4)
-    local fill = Instance.new("Frame", back)
-    local initP = math.clamp((defaultValue - min) / (max - min), 0, 1)
-    fill.Size = UDim2.new(initP, 0, 1, 0)
-    fill.BackgroundColor3 = Color3.fromRGB(220, 35, 55)
-    fill.BorderSizePixel = 0
-    Instance.new("UICorner", fill).CornerRadius = UDim.new(0, 4)
-    local sliding = false
-    local function update(input)
-        local pos = math.clamp((input.Position.X - back.AbsolutePosition.X) / back.AbsoluteSize.X, 0, 1)
-        local val = math.floor(min + (max - min) * pos)
-        fill.Size = UDim2.new(pos, 0, 1, 0)
-        label.Text = text .. ": " .. val
-        callback(val)
-    end
-    back.InputBegan:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.MouseButton1
-           or input.UserInputType == Enum.UserInputType.Touch then
-            sliding = true; update(input)
-        end
-    end)
-    UserInputService.InputChanged:Connect(function(input)
-        if sliding and (input.UserInputType == Enum.UserInputType.MouseMovement
-           or input.UserInputType == Enum.UserInputType.Touch) then update(input) end
-    end)
-    UserInputService.InputEnded:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.MouseButton1
-           or input.UserInputType == Enum.UserInputType.Touch then
-            if sliding then sliding = false; RequestSave() end
-        end
-    end)
-    return frame
+-- ════════════════════════════════════════════════════════════════
+--  ██  ВКЛАДКИ  ██████████████████████████████████████████████████
+-- ════════════════════════════════════════════════════════════════
+
+-- ╔══════════════╗
+-- ║  PLAYER      ║
+-- ╚══════════════╝
+local TabPlayer = Window:CreateTab("⚡ Игрок", 4483362458)
+
+TabPlayer:CreateSection("🏃 Движение")
+
+TabPlayer:CreateSlider({
+   Name = "⚡ Скорость ходьбы", Range={16,500}, Increment=1, CurrentValue=16,
+   Callback = function(v)
+      speedhackVal = v
+      local h = getHum(); if h then h.WalkSpeed = v end
+   end
+})
+
+TabPlayer:CreateSlider({
+   Name = "🦘 Сила прыжка", Range={50,500}, Increment=5, CurrentValue=50,
+   Callback = function(v)
+      jumpVal = v
+      local h = getHum(); if h then h.JumpPower=v; h.UseJumpPower=true end
+   end
+})
+
+TabPlayer:CreateToggle({
+   Name = "♾️ Бесконечный прыжок", CurrentValue=false,
+   Callback = function(v)
+      if infiniteJumpConn then infiniteJumpConn:Disconnect(); infiniteJumpConn=nil end
+      if v then
+         infiniteJumpConn = UserInputService.JumpRequest:Connect(function()
+            local h = getHum()
+            if h then h:ChangeState(Enum.HumanoidStateType.Jumping) end
+         end)
+      end
+   end
+})
+
+-- ────────────────────────────────────────────────────────────────
+--  GOD MODE v2  —  правильная реализация
+--
+--  Проблемы старой версии:
+--   1. BodyPosition с MaxForce Y телепортировал персонажа вниз
+--   2. MaxHealth=1e9 конфликтовал с серверными скриптами которые
+--      сбрасывают HP обратно — это вызывало мерцание и смерть
+--
+--  Новый подход:
+--   • Слушаем событие HealthChanged и мгновенно возвращаем HP
+--   • ForceField блокирует урон на уровне движка (не HP напрямую)
+--   • Чистим дебаффы (Plague/Burn/Frozen) каждые 0.05 сек
+--   • НЕ двигаем HRP — персонаж стоит на месте как обычно
+--   • НЕ меняем MaxHealth — не конфликтуем с сервером
+-- ────────────────────────────────────────────────────────────────
+local godHealthConn  = nil   -- слушатель HP
+local godDebuffConn  = nil   -- чистка дебаффов
+local godFF          = nil   -- ForceField
+
+local function godModeOn()
+   local char = getChar()
+   if not char then return end
+   local hum  = char:FindFirstChildOfClass("Humanoid")
+   local hrp  = char:FindFirstChild("HumanoidRootPart")
+   if not hum or not hrp then return end
+
+   -- 1. ForceField — движок не даёт нанести урон
+   if not char:FindFirstChildOfClass("ForceField") then
+      godFF = Instance.new("ForceField", char)
+      godFF.Visible = false
+   end
+
+   -- 2. Слушаем HealthChanged — если HP упало, мгновенно ставим обратно
+   --    Это работает даже если сервер сбрасывает MaxHealth
+   local lastHP = hum.Health
+   godHealthConn = hum.HealthChanged:Connect(function(hp)
+      if not _G.GodMode then return end
+      if hp < lastHP then
+         -- Урон прошёл мимо ForceField (серверный скрипт) — восстанавливаем
+         hum.Health = hum.MaxHealth
+      end
+      lastHP = hum.Health
+   end)
+
+   -- 3. Чистка дебаффов каждые 0.05 сек
+   local DEBUFFS = {
+      "Plague","Infected","Burn","Frozen","Stun",
+      "Slow","Poison","Bleeding","Ragdolled",
+   }
+   godDebuffConn = RunService.Heartbeat:Connect(function()
+      if not _G.GodMode then return end
+      local c = getChar()
+      if not c then return end
+      for _, name in ipairs(DEBUFFS) do
+         local d = c:FindFirstChild(name)
+         -- Удаляем Script/LocalScript дебаффов
+         -- BoolValue "Ragdolled" только сбрасываем в false, не удаляем
+         if d then
+            if d:IsA("BoolValue") then
+               d.Value = false
+            elseif d:IsA("Script") or d:IsA("LocalScript")
+               or d:IsA("ModuleScript") then
+               pcall(function() d:Destroy() end)
+            else
+               pcall(function() d:Destroy() end)
+            end
+         end
+      end
+      -- Держим ForceField живым (некоторые игры удаляют его)
+      if not c:FindFirstChildOfClass("ForceField") then
+         godFF = Instance.new("ForceField", c)
+         godFF.Visible = false
+      end
+   end)
+
+   notify("☠️ God Mode", "ВКЛ — ForceField + HP restore", 3)
 end
 
-local function CreateCycle(parent, text, options, startIdx, callback)
-    local Btn = Instance.new("TextButton", parent)
-    Btn.Size = UDim2.new(1, -8, 0, 36)
-    Btn.BackgroundColor3 = Color3.fromRGB(32, 32, 42)
-    Btn.TextColor3 = Color3.fromRGB(255, 255, 255)
-    Btn.Font = Enum.Font.GothamSemibold
-    Btn.TextSize = 13
-    Btn.TextXAlignment = Enum.TextXAlignment.Left
-    Btn.AutoButtonColor = false
-    Instance.new("UICorner", Btn).CornerRadius = UDim.new(0, 6)
-    local idx = startIdx
-    Btn.Text = "  " .. text .. ": " .. options[idx]
-    Btn.MouseButton1Click:Connect(function()
-        idx = idx % #options + 1
-        Btn.Text = "  " .. text .. ": " .. options[idx]
-        callback(options[idx], idx)
-        RequestSave()
-    end)
-    return Btn
+local function godModeOff()
+   -- Отключаем listeners
+   if godHealthConn then godHealthConn:Disconnect(); godHealthConn = nil end
+   if godDebuffConn then godDebuffConn:Disconnect(); godDebuffConn = nil end
+   -- Убираем ForceField
+   local char = getChar()
+   if char then
+      for _, ff in pairs(char:GetChildren()) do
+         if ff:IsA("ForceField") then ff:Destroy() end
+      end
+   end
+   godFF = nil
+   notify("☠️ God Mode", "ВЫКЛ", 2)
 end
 
---------------------------------------------------------------------------------
--- ВКЛАДКА БОЙ
---------------------------------------------------------------------------------
-CreateToggle(CombatTab, "ESP Подсветка (Highlight)", Settings.ESP, function(v) Settings.ESP = v end)
-CreateToggle(CombatTab, "Аимбот", Settings.Aimbot, function(v) Settings.Aimbot = v end)
-CreateToggle(CombatTab, "Авто-Стрельба", Settings.AutoShoot, function(v) Settings.AutoShoot = v end)
-
-CreateCycle(CombatTab, "Точка прицела", {"Голова", "Тело"},
-    Settings.TargetPart == "Head" and 1 or 2, function(val)
-    Settings.TargetPart = (val == "Голова") and "Head" or "HumanoidRootPart"
+-- Перезапускаем God Mode после respawn если был включён
+lp.CharacterAdded:Connect(function()
+   if _G.GodMode then
+      task.wait(0.5)   -- ждём пока персонаж загрузится
+      godModeOn()
+   end
 end)
 
-local AutoLockToggle, SetAutoLockState
-AutoLockToggle, SetAutoLockState = CreateToggle(CombatTab, "Авто-Лок", Settings.AutoLock, function(v)
-    Settings.AutoLock = v
-    if v then
-        Settings.LockedTarget = GetClosestTargetInFOV and GetClosestTargetInFOV() or nil
-        LockBtn.BackgroundColor3 = Color3.fromRGB(0, 180, 80)
-    else
-        Settings.LockedTarget = nil
-        LockBtn.BackgroundColor3 = Color3.fromRGB(60, 60, 70)
-    end
-end)
+local GodToggle = TabPlayer:CreateToggle({
+   Name = "☠️ Бог режим v2 (FF + HP restore + дебаффы)",
+   CurrentValue = false,
+   Callback = function(v)
+      _G.GodMode = v
+      if v then godModeOn() else godModeOff() end
+   end
+})
 
-CreateSlider(CombatTab, "Размер FOV (px)", 10, 300, Settings.FOVRadius, function(v)
-    Settings.FOVRadius = v
-end)
+TabPlayer:CreateKeybind({
+   Name="⌨️ Кейбинд: Бог режим", CurrentKeybind="G", HoldToInteract=false,
+   Callback=function() GodToggle:Set(not _G.GodMode) end
+})
 
---------------------------------------------------------------------------------
--- FLY (по джойстику телефона)
---------------------------------------------------------------------------------
-local flyBV, flyConn
-local FlyInputs = {Up = false, Down = false}
+-- Anti-Ragdoll заменён на Ragdoll Bypass через принудительный сброс состояния
+local AntiRagToggle = TabPlayer:CreateToggle({
+   Name = "🔄 Обход регдола", CurrentValue=false,
+   Callback = function(v)
+      _G.AntiRagdoll = v
+      if v then
+         _G.ARC = RunService.Heartbeat:Connect(function()
+            if not _G.AntiRagdoll then
+               _G.ARC:Disconnect(); return
+            end
+            local char = getChar(); if not char then return end
+            local hum  = char:FindFirstChildOfClass("Humanoid")
+            if not hum then return end
+            local root = char:FindFirstChild("HumanoidRootPart")
 
-local function StartFly()
-    local char = LocalPlayer.Character
-    if not char then return end
-    local root = char:FindFirstChild("HumanoidRootPart")
-    if not root then return end
+            -- Убираем все BallSocketConstraint / HingeConstraint которые делают регдол
+            for _, v2 in pairs(char:GetDescendants()) do
+               if v2:IsA("BallSocketConstraint") or v2:IsA("HingeConstraint") then
+                  v2.Enabled = false
+               end
+            end
 
-    if flyBV then flyBV:Destroy() end
-    if flyConn then flyConn:Disconnect() end
+            -- Сбрасываем состояние регдола
+            local state = hum:GetState()
+            if state == Enum.HumanoidStateType.Ragdoll
+            or state == Enum.HumanoidStateType.FallingDown then
+               hum.PlatformStand = false
+               hum:ChangeState(Enum.HumanoidStateType.GettingUp)
+            end
 
-    flyBV = Instance.new("BodyVelocity")
-    flyBV.MaxForce = Vector3.new(1e8, 1e8, 1e8)
-    flyBV.Velocity = Vector3.zero
-    flyBV.Name = "FlyBV"
-    flyBV.Parent = root
+            -- Удаляем BoolValue "Ragdolled" если игра его юзает
+            local rag = char:FindFirstChild("Ragdolled")
+            if rag and rag.Value == true then
+               rag.Value = false
+            end
+         end)
+      else
+         if _G.ARC then _G.ARC:Disconnect() end
+         -- Возвращаем constraints
+         local char = getChar()
+         if char then
+            for _, v2 in pairs(char:GetDescendants()) do
+               if v2:IsA("BallSocketConstraint") or v2:IsA("HingeConstraint") then
+                  v2.Enabled = true
+               end
+            end
+         end
+      end
+   end
+})
 
-    flyConn = RunService.RenderStepped:Connect(function()
-        if not Settings.Fly then return end
-        local c = LocalPlayer.Character
-        if not c then return end
-        local r = c:FindFirstChild("HumanoidRootPart")
-        local h = c:FindFirstChildOfClass("Humanoid")
-        if not r or not h or not flyBV then return end
+TabPlayer:CreateSection("✨ Специальные")
 
-        -- Горизонталь: джойстик (телефон) + WASD (ПК) — через MoveDirection
-        local dir = h.MoveDirection
+TabPlayer:CreateToggle({
+   Name = "👻 НоКлип (сквозь стены)", CurrentValue=false,
+   Callback = function(v)
+      noclipEnabled = v
+      if noclipConn then noclipConn:Disconnect(); noclipConn=nil end
+      if v then
+         noclipConn = RunService.Stepped:Connect(function()
+            if not noclipEnabled then noclipConn:Disconnect(); return end
+            local char = getChar()
+            if not char then return end
+            for _,p in pairs(char:GetDescendants()) do
+               if p:IsA("BasePart") then p.CanCollide=false end
+            end
+         end)
+      else
+         local char = getChar()
+         if char then
+            for _,p in pairs(char:GetDescendants()) do
+               if p:IsA("BasePart") then p.CanCollide=true end
+            end
+         end
+      end
+   end
+})
 
-        -- Вертикаль: Space/Ctrl (ПК) или ▲▼ (кнопки на телефоне)
-        local vertical = 0
-        if UserInputService:IsKeyDown(Enum.KeyCode.Space) or FlyInputs.Up then
-            vertical = vertical + 1
-        end
-        if UserInputService:IsKeyDown(Enum.KeyCode.LeftControl) or FlyInputs.Down then
-            vertical = vertical - 1
-        end
-        dir = dir + Vector3.new(0, vertical, 0)
+TabPlayer:CreateToggle({
+   Name = "🫥 Режим призрака", CurrentValue=false,
+   Callback = function(v)
+      ghostEnabled = v
+      local char = getChar()
+      if char then
+         for _,p in pairs(char:GetDescendants()) do
+            if p:IsA("BasePart") then
+               p.LocalTransparencyModifier = v and 0.6 or 0
+            end
+         end
+      end
+   end
+})
 
-        if dir.Magnitude > 0 then dir = dir.Unit end
-        flyBV.Velocity = dir * Settings.FlySpeed
-    end)
+TabPlayer:CreateButton({
+   Name = "💀 Пересоздать персонажа", Callback=function()
+      lp:LoadCharacter()
+      notify("🔄 Respawn","Персонаж пересоздан",2)
+   end
+})
+
+TabPlayer:CreateButton({
+   Name = "📋 Скопировать ник", Callback=function()
+      setclipboard(lp.Name)
+      notify("📋 Скопировано", lp.Name, 2)
+   end
+})
+
+-- ╔══════════════╗
+-- ║  FLY         ║
+-- ╚══════════════╝
+local TabFly = Window:CreateTab("🚁 Полёт", 4483362458)
+
+TabFly:CreateSection("✈️ Настройки полёта")
+
+local FlyToggle = TabFly:CreateToggle({
+   Name = "🚁 Полёт", CurrentValue=false,
+   Callback = function(v)
+      flyEnabled = v
+      local char = lp.Character or lp.CharacterAdded:Wait()
+      local root = char:WaitForChild("HumanoidRootPart")
+      if v then
+         local bv = Instance.new("BodyVelocity",root)
+         bv.MaxForce=Vector3.new(1e8,1e8,1e8); bv.Velocity=Vector3.new(0,0,0); bv.Name="FlyBV"
+         task.spawn(function()
+            while flyEnabled do
+               local cf = cam.CFrame
+               local dir = Vector3.new()
+               local UIS = UserInputService
+               if UIS:IsKeyDown(Enum.KeyCode.W) then dir+=cf.LookVector end
+               if UIS:IsKeyDown(Enum.KeyCode.S) then dir-=cf.LookVector end
+               if UIS:IsKeyDown(Enum.KeyCode.A) then dir-=cf.RightVector end
+               if UIS:IsKeyDown(Enum.KeyCode.D) then dir+=cf.RightVector end
+               if UIS:IsKeyDown(Enum.KeyCode.Space) then dir+=Vector3.new(0,1,0) end
+               if UIS:IsKeyDown(Enum.KeyCode.LeftControl) then dir-=Vector3.new(0,1,0) end
+               bv.Velocity = dir.Magnitude > 0 and dir.Unit*flySpeed or Vector3.new()
+               task.wait()
+            end
+            local bvF = root:FindFirstChild("FlyBV")
+            if bvF then bvF:Destroy() end
+         end)
+      end
+   end
+})
+
+TabFly:CreateKeybind({
+   Name="⌨️ Кейбинд: Полёт", CurrentKeybind="F", HoldToInteract=false,
+   Callback=function() FlyToggle:Set(not flyEnabled) end
+})
+
+TabFly:CreateSlider({
+   Name="💨 Скорость полёта", Range={10,500}, Increment=5, CurrentValue=50,
+   Callback=function(v) flySpeed=v end
+})
+
+TabFly:CreateToggle({
+   Name="🛡️ Анти-Войд (платформа -15)", CurrentValue=false,
+   Callback=function(v)
+      platformEnabled=v
+      if v then
+         platform=Instance.new("Part",workspace)
+         platform.Size=Vector3.new(2e5,1,2e5)
+         platform.Anchored=true; platform.CanCollide=true
+         platform.Transparency=0.75; platform.Material=Enum.Material.ForceField
+         task.spawn(function()
+            while platformEnabled do
+               local hrp=getHRP()
+               if hrp then platform.Position=Vector3.new(hrp.Position.X,-15,hrp.Position.Z) end
+               task.wait()
+            end
+            if platform then platform:Destroy() end
+         end)
+      elseif platform then
+         platform:Destroy(); platform=nil
+      end
+   end
+})
+
+-- ╔══════════════╗
+-- ║  ESP         ║
+-- ╚══════════════╝
+local TabESP = Window:CreateTab("👁 ESP", 4483362458)
+
+TabESP:CreateSection("⚙️ Основное")
+
+TabESP:CreateToggle({
+   Name="👁 Включить ESP", CurrentValue=false,
+   Callback=function(v)
+      espEnabled=v
+      if v then
+         for _,p in ipairs(Players:GetPlayers()) do buildESP(p) end
+         Players.PlayerAdded:Connect(buildESP)
+         Players.PlayerRemoving:Connect(removeESP)
+         startESP()
+         notify("👁 ESP","ESP включён ✓",2)
+      else
+         stopESP(); notify("👁 ESP","ESP выключён",2)
+      end
+   end
+})
+
+TabESP:CreateToggle({
+   Name="✨ Подсветка (сквозь стены)", CurrentValue=true,
+   Callback=function(v)
+      espHighlight=v
+      for _,o in pairs(espObjects) do o.hl.Enabled=v end
+   end
+})
+
+TabESP:CreateToggle({
+   Name="📦 Боксы хитбоксов", CurrentValue=false,
+   Callback=function(v) espBoxes=v end
+})
+
+TabESP:CreateToggle({
+   Name="📏 Линии от персонажа", CurrentValue=false,
+   Callback=function(v) espLines=v end
+})
+
+TabESP:CreateToggle({
+   Name="🏷️ Имена", CurrentValue=true,
+   Callback=function(v)
+      espNames=v
+      for _,o in pairs(espObjects) do o.bb.Enabled=v end
+   end
+})
+
+TabESP:CreateToggle({
+   Name="📐 Дистанция", CurrentValue=true,
+   Callback=function(v) espDist=v end
+})
+
+TabESP:CreateToggle({
+   Name="❤️ Полоска HP", CurrentValue=true,
+   Callback=function(v)
+      espHealth=v
+      for _,o in pairs(espObjects) do o.hpBg.Visible=v end
+   end
+})
+
+TabESP:CreateSection("🎛️ Управление")
+
+TabESP:CreateButton({
+   Name="🔄 Перезагрузить ESP", Callback=function()
+      for p,_ in pairs(espObjects) do removeESP(p) end
+      espObjects={}
+      for _,p in ipairs(Players:GetPlayers()) do buildESP(p) end
+      notify("👁 ESP","Перезагружено",2)
+   end
+})
+
+-- ╔══════════════╗
+-- ║  TELEPORT    ║
+-- ╚══════════════╝
+local TabTP = Window:CreateTab("🌀 Телепорт", 4483362458)
+
+TabTP:CreateSection("🎯 Телепорт к игроку")
+
+local selectedPlayer = nil  -- всегда строка с именем
+
+-- Rayfield иногда отдаёт таблицу {"имя"} вместо строки — парсим оба варианта
+local function parseOpt(opt)
+   if type(opt) == "table" then
+      return tostring(opt[1] or "")
+   end
+   return tostring(opt or "")
 end
 
-local function StopFly()
-    if flyBV then flyBV:Destroy() flyBV = nil end
-    if flyConn then flyConn:Disconnect() flyConn = nil end
+local function findPlayerByName(name)
+   if not name or name == "" then return nil end
+   for _, p in ipairs(Players:GetPlayers()) do
+      if p.Name == name then return p end
+   end
+   return nil
 end
 
--- Кнопки ▲▼ для мобилы (справа, рядом с прыжком)
-local FlyControls = Instance.new("Frame")
-FlyControls.Size = UDim2.new(0, 60, 0, 130)
-FlyControls.Position = UDim2.new(1, -80, 0.6, 0)
-FlyControls.BackgroundTransparency = 1
-FlyControls.Visible = false
-FlyControls.Parent = ScreenGui
-
-local function MakeFlyBtn(text, pos, key)
-    local b = Instance.new("TextButton")
-    b.Size = UDim2.new(0, 56, 0, 56)
-    b.Position = pos
-    b.BackgroundColor3 = Color3.fromRGB(180, 30, 45)
-    b.BackgroundTransparency = 0.15
-    b.Text = text
-    b.TextColor3 = Color3.fromRGB(255, 255, 255)
-    b.Font = Enum.Font.GothamBold
-    b.TextSize = 26
-    b.AutoButtonColor = false
-    b.Parent = FlyControls
-    Instance.new("UICorner", b).CornerRadius = UDim.new(1, 0)
-
-    local function on()  FlyInputs[key] = true  end
-    local function off() FlyInputs[key] = false end
-
-    b.MouseButton1Down:Connect(on)
-    b.MouseButton1Up:Connect(off)
-    b.InputBegan:Connect(function(i)
-        if i.UserInputType == Enum.UserInputType.Touch then on() end
-    end)
-    b.InputEnded:Connect(function(i)
-        if i.UserInputType == Enum.UserInputType.Touch then off() end
-    end)
-end
-MakeFlyBtn("▲", UDim2.new(0, 0, 0, 0),   "Up")
-MakeFlyBtn("▼", UDim2.new(0, 0, 0, 70),  "Down")
-
---------------------------------------------------------------------------------
--- NOCLIP
---------------------------------------------------------------------------------
-local noclipConn
-local function StartNoclip()
-    if noclipConn then return end
-    noclipConn = RunService.Stepped:Connect(function()
-        local char = LocalPlayer.Character
-        if not char then return end
-        for _, part in ipairs(char:GetDescendants()) do
-            if part:IsA("BasePart") and part.CanCollide then part.CanCollide = false end
-        end
-    end)
-end
-local function StopNoclip()
-    if noclipConn then noclipConn:Disconnect() noclipConn = nil end
+local function getOtherNames()
+   local t = {}
+   for _, p in ipairs(Players:GetPlayers()) do
+      if p ~= lp then table.insert(t, p.Name) end
+   end
+   if #t == 0 then t = {"(нет игроков)"} end
+   return t
 end
 
---------------------------------------------------------------------------------
--- ВКЛАДКА ДВИЖ
---------------------------------------------------------------------------------
-CreateToggle(MoveTab, "Fly (Полёт)", Settings.Fly, function(v)
-    Settings.Fly = v
-    FlyControls.Visible = v
-    if v then StartFly() else StopFly() end
-end)
-CreateNumber(MoveTab, "Скорость полёта", Settings.FlySpeed, function(n)
-    Settings.FlySpeed = math.clamp(n, 5, 500)
-end)
-CreateAction(MoveTab, "➡ TP вперёд (30 studs)", function()
-    local char = LocalPlayer.Character
-    if not char then return end
-    local hrp = char:FindFirstChild("HumanoidRootPart")
-    if not hrp then return end
-    hrp.CFrame = CFrame.new(hrp.Position + Camera.CFrame.LookVector * 30)
-end)
-CreateAction(MoveTab, "⬆ TP вверх (15 studs)", function()
-    local char = LocalPlayer.Character
-    if not char then return end
-    local hrp = char:FindFirstChild("HumanoidRootPart")
-    if not hrp then return end
-    hrp.CFrame = hrp.CFrame + Vector3.new(0, 15, 0)
-end)
-CreateToggle(MoveTab, "Click TP (телепорт по клику)", Settings.ClickTP, function(v)
-    Settings.ClickTP = v
+-- Dropdown с реальным обновлением через Refresh
+local initNames = getOtherNames()
+selectedPlayer = (initNames[1] ~= "(нет игроков)") and initNames[1] or nil
+
+local playerDropdown = TabTP:CreateDropdown({
+   Name          = "🎯 Выбрать игрока",
+   Options       = initNames,
+   CurrentOption = initNames[1],
+   Callback      = function(opt)
+      local name = parseOpt(opt)
+      if name ~= "(нет игроков)" and name ~= "" then
+         selectedPlayer = name
+      end
+   end
+})
+
+TabTP:CreateButton({
+   Name = "🚀 Телепорт к выбранному",
+   Callback = function()
+      -- Перечитываем selectedPlayer на случай если дропдаун не стриггерил callback
+      if not selectedPlayer or selectedPlayer == "(нет игроков)" then
+         notify("🌀 Телепорт", "Сначала выберите игрока!", 3)
+         return
+      end
+      local target = findPlayerByName(selectedPlayer)
+      if not target then
+         notify("🌀 Телепорт", selectedPlayer .. " вышел из игры", 3)
+         return
+      end
+      local tHRP  = target.Character and target.Character:FindFirstChild("HumanoidRootPart")
+      local myHRP = getHRP()
+      if not myHRP then notify("🌀 Телепорт", "Твой персонаж не загружен", 3); return end
+      if not tHRP  then notify("🌀 Телепорт", selectedPlayer .. " — персонаж не загружен", 3); return end
+      myHRP.CFrame = tHRP.CFrame * CFrame.new(3, 0, 0)
+      notify("🌀 Телепорт", "→ " .. selectedPlayer, 2)
+   end
+})
+
+TabTP:CreateButton({
+   Name = "🔄 Обновить список",
+   Callback = function()
+      local names = getOtherNames()
+      -- Реально обновляем варианты в дропдауне
+      playerDropdown:Refresh(names, true)
+      -- Выставляем первого игрока по умолчанию
+      if names[1] ~= "(нет игроков)" then
+         selectedPlayer = names[1]
+      end
+      notify("👥 Игроки", "Список обновлён: " .. table.concat(names, ", "), 4)
+   end
+})
+
+TabTP:CreateSection("⚡ Быстрые телепорты")
+
+TabTP:CreateButton({
+   Name="🎲 Случайный игрок", Callback=function()
+      local list={}
+      for _,p in ipairs(Players:GetPlayers()) do
+         if p~=lp and p.Character and p.Character:FindFirstChild("HumanoidRootPart") then
+            table.insert(list,p)
+         end
+      end
+      if #list==0 then notify("🌀 Телепорт","Нет других игроков",3); return end
+      local t=list[math.random(1,#list)]
+      local myHRP=getHRP()
+      if myHRP then
+         myHRP.CFrame = t.Character.HumanoidRootPart.CFrame*CFrame.new(3,0,0)
+         notify("🌀 Телепорт","→ "..t.Name.." (случайно)",2)
+      end
+   end
+})
+
+TabTP:CreateButton({
+   Name="🏠 На точку спавна", Callback=function()
+      local hrp = getHRP()
+      if not hrp then notify("🌀 Телепорт","Персонаж не загружен",3); return end
+      -- Ищем реальный SpawnLocation на карте
+      local spawn = nil
+      for _, v in pairs(workspace:GetDescendants()) do
+         if v:IsA("SpawnLocation") then
+            spawn = v; break
+         end
+      end
+      if spawn then
+         hrp.CFrame = CFrame.new(spawn.Position + Vector3.new(0, 5, 0))
+         notify("🌀 Телепорт","→ Спавн: "..tostring(spawn.Position),2)
+      else
+         -- Fallback если SpawnLocation не найден
+         hrp.CFrame = CFrame.new(0, 10, 0)
+         notify("🌀 Телепорт","Спавн не найден, используем 0,10,0",2)
+      end
+   end
+})
+
+TabTP:CreateSection("📌 Слоты позиций")
+
+local slotNames = {"Slot 1","Slot 2","Slot 3"}
+for i,name in ipairs(slotNames) do
+   TabTP:CreateButton({
+      Name="Save  "..name, Callback=function()
+         local hrp=getHRP()
+         if hrp then
+            savedPositions[i]=hrp.CFrame
+            notify("📌 Позиция","Сохранено: "..name,2)
+         end
+      end
+   })
+   TabTP:CreateButton({
+      Name="Return  "..name, Callback=function()
+         if not savedPositions[i] then notify("📌 Позиция","Слот пуст!",3); return end
+         local hrp=getHRP()
+         if hrp then hrp.CFrame=savedPositions[i]; notify("📌 Позиция","→ "..name,2) end
+      end
+   })
+end
+
+-- ╔══════════════╗
+-- ║  VISUAL      ║
+-- ╚══════════════╝
+local TabVis = Window:CreateTab("🎨 Визуал", 4483362458)
+
+TabVis:CreateSection("📷 Камера")
+
+TabVis:CreateSlider({
+   Name="🔭 FOV камеры", Range={50,130}, Increment=1, CurrentValue=70,
+   Callback=function(v) cam.FieldOfView=v end
+})
+
+TabVis:CreateSlider({
+   Name="🔍 Дистанция камеры", Range={5,60}, Increment=1, CurrentValue=12,
+   Callback=function(v)
+      thirdPersonDist=v
+      lp.CameraMaxZoomDistance=v
+      lp.CameraMinZoomDistance=v
+   end
+})
+
+TabVis:CreateButton({
+   Name="🔄 Сбросить камеру", Callback=function()
+      cam.FieldOfView=70
+      lp.CameraMaxZoomDistance=400
+      lp.CameraMinZoomDistance=0.5
+      notify("📷 Камера","Сброшена",2)
+   end
+})
+
+TabVis:CreateSection("💡 Освещение")
+
+TabVis:CreateToggle({
+   Name="☀️ Фуллбрайт", CurrentValue=false,
+   Callback=function(v)
+      fullbrightActive=v
+      if v then
+         Lighting.Ambient=Color3.new(1,1,1)
+         Lighting.Brightness=2
+         Lighting.FogEnd=1e6
+         Lighting.GlobalShadows=false
+         notify("☀️ Визуал","Фуллбрайт ВКЛ",2)
+      else
+         Lighting.Ambient=origAmbient
+         Lighting.Brightness=origBrightness
+         Lighting.FogEnd=origFogEnd
+         Lighting.GlobalShadows=true
+         notify("☀️ Визуал","Фуллбрайт ВЫКЛ",2)
+      end
+   end
+})
+
+TabVis:CreateColorPicker({
+   Name="🌈 Цвет атмосферы", Color=Color3.fromRGB(70,70,70),
+   Callback=function(c) Lighting.Ambient=c end
+})
+
+TabVis:CreateSlider({
+   Name="💡 Яркость мира", Range={0,10}, Increment=1, CurrentValue=2,
+   Callback=function(v) Lighting.Brightness=v end
+})
+
+TabVis:CreateToggle({
+   Name="🌫️ Убрать туман", CurrentValue=false,
+   Callback=function(v)
+      Lighting.FogEnd = v and 1e6 or origFogEnd
+   end
+})
+
+TabVis:CreateSection("🧍 Персонаж")
+
+TabVis:CreateColorPicker({
+   Name="🎨 Цвет тела", Color=Color3.fromRGB(255,200,100),
+   Callback=function(c)
+      local char=getChar()
+      if not char then return end
+      for _,p in pairs(char:GetDescendants()) do
+         if p:IsA("BasePart") and p.Name~="HumanoidRootPart" then p.Color=c end
+      end
+   end
+})
+
+TabVis:CreateToggle({
+   Name="👻 Невидимость", CurrentValue=false,
+   Callback=function(v)
+      local char=getChar()
+      if not char then return end
+      for _,p in pairs(char:GetDescendants()) do
+         if p:IsA("BasePart") then p.Transparency = v and 1 or 0 end
+         if p:IsA("Decal") then p.Transparency = v and 1 or 0 end
+      end
+      notify("👻 Визуал", v and "Невидимость ВКЛ" or "Невидимость ВЫКЛ", 2)
+   end
+})
+
+-- ╔══════════════╗
+-- ║  WORLD       ║
+-- ╚══════════════╝
+local TabWorld = Window:CreateTab("🌍 Мир", 4483362458)
+
+TabWorld:CreateSection("⚙️ Физика мира")
+
+TabWorld:CreateSlider({
+   Name="🌍 Гравитация", Range={0,300}, Increment=5, CurrentValue=196,
+   Callback=function(v) workspace.Gravity=v end
+})
+
+TabWorld:CreateButton({
+   Name="🔄 Сбросить гравитацию", Callback=function()
+      workspace.Gravity=196.2
+      notify("🌍 Мир","Гравитация сброшена",2)
+   end
+})
+
+TabWorld:CreateToggle({
+   Name="🚫 Убрать дождь / частицы", CurrentValue=false,
+   Callback=function(v)
+      for _,d in pairs(workspace:GetDescendants()) do
+         if d:IsA("ParticleEmitter") or d:IsA("Smoke") or d:IsA("Fire") or d:IsA("Sparkles") then
+            d.Enabled = not v
+         end
+      end
+   end
+})
+
+TabWorld:CreateSection("🗂️ Объекты")
+
+TabWorld:CreateButton({
+   Name="💡 Выключить освещение", Callback=function()
+      for _,v in pairs(workspace:GetDescendants()) do
+         if v:IsA("PointLight") or v:IsA("SpotLight") or v:IsA("SurfaceLight") then
+            v.Enabled=false
+         end
+      end
+      notify("💡 Мир","Освещение выключено",2)
+   end
+})
+
+TabWorld:CreateButton({
+   Name="🗑️ Удалить декорации", Callback=function()
+      for _,v in pairs(workspace:GetDescendants()) do
+         if v:IsA("Decal") or v:IsA("Texture") or v:IsA("SpecialMesh") then
+            pcall(function() v:Destroy() end)
+         end
+      end
+      notify("🗑️ Мир","Декорации удалены",2)
+   end
+})
+
+TabWorld:CreateButton({
+   Name="✨ Очистить эффекты Lighting", Callback=function()
+      for _,v in pairs(Lighting:GetChildren()) do
+         if v:IsA("PostEffect") or v:IsA("Sky") or v:IsA("Atmosphere") then
+            v:Destroy()
+         end
+      end
+      notify("✨ Мир","Эффекты Lighting очищены",2)
+   end
+})
+
+-- ╔══════════════╗
+-- ║  MY SCRIPTS  ║
+-- ╚══════════════╝
+local TabScripts = Window:CreateTab("📦 Мои скрипты", 4483362458)
+
+TabScripts:CreateSection("🥊 Slap Battles")
+
+TabScripts:CreateButton({ Name="Bob The Eternal", Callback=function()
+   loadstring(game:HttpGet("https://raw.githubusercontent.com/Dusty1234567890/Rob/main/Rob"))()
+end})
+
+TabScripts:CreateButton({ Name="Bob The Eternal v2", Callback=function()
+   loadstring(game:HttpGet("https://raw.githubusercontent.com/Dusty1234567890/Rob/main/Rob"))()
+end})
+
+TabScripts:CreateButton({ Name="Tycoon Clicker", Callback=function()
+   loadstring(game:HttpGet("https://raw.githubusercontent.com/IncognitoScripts/SlapBattles/main/TycoonClicker",true))()
+end})
+
+TabScripts:CreateButton({ Name="Boss Fight + Guide", Callback=function()
+   loadstring(game:HttpGet("https://pastefy.app/Ty7G6BXs/raw"))()
+end})
+
+TabScripts:CreateButton({ Name="Killstreak Farm", Callback=function()
+   loadstring(game:HttpGet("https://raw.githubusercontent.com/IncognitoScripts/SlapBattles/main/KillstreakFarm",true))()
+end})
+
+TabScripts:CreateButton({ Name="SBP", Callback=function()
+   loadstring(game:HttpGet("https://raw.githubusercontent.com/xxxrrxsds-art/losehubs/refs/heads/main/sbp.lua"))()
+end})
+
+TabScripts:CreateSection("🎮 Другие игры")
+
+TabScripts:CreateButton({ Name="Doors", Callback=function()
+   loadstring(game:HttpGet("https://raw.githubusercontent.com/notzanocoddz4/bobdoors/main/main.lua"))()
+end})
+
+TabScripts:CreateButton({ Name="Tribe Survival", Callback=function()
+   loadstring(game:HttpGet('https://raw.githubusercontent.com/lebumbum/tribe_survival/refs/heads/main/tribe'))()
+end})
+
+TabScripts:CreateButton({ Name="Dungeon Leveling (code: SoC14BpapEq)", Callback=function()
+   loadstring(game:HttpGet('https://raw.githubusercontent.com/lebumbum/dungeonlevelingproject4/refs/heads/main/project4554'))()
+end})
+
+-- ╔══════════════╗
+-- ║  SAFETY      ║
+-- ╚══════════════╝
+local TabSafe = Window:CreateTab("🔒 Защита", 4483362458)
+
+TabSafe:CreateSection("🛡️ Защита")
+
+TabSafe:CreateButton({
+   Name="🛡️ Обход анти-чита (BETA)", Callback=function()
+      local ok,err = pcall(function()
+         local mt=getrawmetatable(game)
+         local old=mt.__index
+         setreadonly(mt,false)
+         mt.__index=newcclosure(function(t,k)
+            if not checkcaller() and t:IsA("Humanoid") and (k=="WalkSpeed" or k=="JumpPower") then
+               return k=="WalkSpeed" and 16 or 50
+            end
+            return old(t,k)
+         end)
+         setreadonly(mt,true)
+      end)
+      notify("🛡️ Байпас", ok and "Активирован ✓" or "Ошибка: "..tostring(err), 3)
+   end
+})
+
+local AntiAfkToggle = TabSafe:CreateToggle({
+   Name="⏰ Анти-АФК", CurrentValue=true,
+   Callback=function(v)
+      antiAfkEnabled=v
+      if antiAfkConn then antiAfkConn:Disconnect(); antiAfkConn=nil end
+      if v then
+         local vu=game:GetService("VirtualUser")
+         antiAfkConn=lp.Idled:Connect(function()
+            vu:CaptureController(); vu:ClickButton2(Vector2.new())
+         end)
+      end
+   end
+})
+
+TabSafe:CreateKeybind({
+   Name="⌨️ Кейбинд: Анти-АФК", CurrentKeybind="H", HoldToInteract=false,
+   Callback=function() AntiAfkToggle:Set(not antiAfkEnabled) end
+})
+
+TabSafe:CreateToggle({
+   Name="💀 Уведомления о смертях", CurrentValue=false,
+   Callback=function(v)
+      _G.DeathNotify=v
+      if v then
+         for _,p in ipairs(Players:GetPlayers()) do
+            if p~=lp then
+               local function hookChar(char)
+                  local hum=char:FindFirstChildOfClass("Humanoid")
+                  if hum then hum.Died:Connect(function()
+                     if _G.DeathNotify then notify("Died",p.Name.." died!",3) end
+                  end) end
+               end
+               if p.Character then hookChar(p.Character) end
+               p.CharacterAdded:Connect(hookChar)
+            end
+         end
+      end
+   end
+})
+
+TabSafe:CreateSection("ℹ️ Информация")
+
+TabSafe:CreateButton({
+   Name="📋 Скопировать ID игры", Callback=function()
+      local id=tostring(game.PlaceId)
+      setclipboard(id)
+      notify("📋 ID игры","PlaceId: "..id,3)
+   end
+})
+
+TabSafe:CreateButton({
+   Name="📋 Скопировать ID сервера", Callback=function()
+      setclipboard(game.JobId)
+      notify("📋 Сервер","JobId скопирован",3)
+   end
+})
+
+TabSafe:CreateButton({
+   Name="👥 Список игроков", Callback=function()
+      local t={}
+      for _,p in ipairs(Players:GetPlayers()) do
+         table.insert(t, p.Name.." | ID: "..p.UserId)
+      end
+      local out=table.concat(t,"\n")
+      print("=== 👥 Игроки ===\n"..out)
+      setclipboard(out)
+      notify("👥 Игроки","Скопировано в буфер",3)
+   end
+})
+
+TabSafe:CreateDivider()
+
+TabSafe:CreateButton({
+   Name="🔴 Выгрузить хаб", Callback=function()
+      -- ── God Mode ──
+      _G.GodMode = false
+      godModeOff()
+
+      -- ── Все флаги ──
+      _G.AntiRagdoll = false
+      _G.DeathNotify = false
+      flyEnabled     = false
+      noclipEnabled  = false
+      platformEnabled= false
+
+      -- ── Connections ──
+      if infiniteJumpConn then infiniteJumpConn:Disconnect() end
+      if antiAfkConn      then antiAfkConn:Disconnect()      end
+      if noclipConn       then noclipConn:Disconnect()       end
+      if _G.ARC           then pcall(function() _G.ARC:Disconnect() end) end
+
+      -- ── FPS Booster ──
+      pcall(function() if FPSBooster.active then FPSBooster:Disable() end end)
+
+      -- ── Watermark ──
+      pcall(function()
+         Watermark:Toggle(false)
+         if Watermark.conn then Watermark.conn:Disconnect() end
+         Watermark.bg:Remove()
+         Watermark.bar:Remove()
+         Watermark.txt:Remove()
+      end)
+
+      -- ── Новые системы v3.2 ──
+      pcall(function()
+         if _G.MistyCleanupV2 then _G.MistyCleanupV2() end
+      end)
+
+      -- ── Сброс параметров персонажа ──
+      local h = getHum()
+      if h then
+         h.WalkSpeed  = 16
+         h.JumpPower  = 50
+         h.MaxHealth  = 100
+         h.Health     = 100
+         h.AutoRotate = true
+      end
+
+      -- ── Ragdoll Bypass constraints ──
+      local char = getChar()
+      if char then
+         for _, v in pairs(char:GetDescendants()) do
+            if v:IsA("BallSocketConstraint") or v:IsA("HingeConstraint") then
+               v.Enabled = true
+            end
+         end
+      end
+
+      -- ── Мир / камера ──
+      workspace.Gravity          = 196.2
+      cam.FieldOfView            = 70
+      lp.CameraMaxZoomDistance   = 400
+      lp.CameraMinZoomDistance   = 0.5
+
+      -- ── Освещение ──
+      if fullbrightActive then
+         Lighting.Ambient       = origAmbient
+         Lighting.Brightness    = origBrightness
+         Lighting.FogEnd        = origFogEnd
+         Lighting.GlobalShadows = true
+      end
+
+      -- ── ESP ──
+      stopESP()
+      for p, _ in pairs(espObjects) do removeESP(p) end
+      pcall(function() espFolder:Destroy() end)
+
+      -- ── Платформа ──
+      if platform then platform:Destroy() end
+
+      -- ── Сохраняем конфиг перед выгрузкой ──
+      pcall(function()
+         if SettingsRegistry and SettingsRegistry.SaveAll then
+            SettingsRegistry.SaveAll()
+         end
+      end)
+
+      notify("🔴 Хаб", "Выгружен успешно", 2)
+      task.wait(0.5)
+      Rayfield:Destroy()
+   end
+})
+
+-- ╔══════════════════════════════════════════════════════════════╗
+-- ║  FPS BOOSTER + WATERMARK + SERVER TAB                       ║
+-- ╚══════════════════════════════════════════════════════════════╝
+
+-- ────────────────────────────────────────────────────────────────
+--  FPS BOOSTER SYSTEM
+--  Принцип: убираем всё что жрёт GPU/CPU не влияя на геймплей.
+--  Каждый шаг обратим — при выключении возвращаем оригинал.
+-- ────────────────────────────────────────────────────────────────
+local FPSBooster = {}
+FPSBooster.active      = false
+FPSBooster.origShadows = Lighting.GlobalShadows
+FPSBooster.origQuality = settings().Rendering.QualityLevel
+FPSBooster.origMaxFPS  = settings().Rendering.FrameRateManager
+FPSBooster.removedObjs = {}   -- храним удалённые объекты чтобы вернуть
+
+function FPSBooster:Enable()
+   if self.active then return end
+   self.active = true
+
+   -- 1. Максимальная частота кадров через setfpscap если есть
+   if setfpscap then setfpscap(0) end  -- 0 = без ограничений
+
+   -- 2. Отключаем тени (самый большой буст)
+   self.origShadows      = Lighting.GlobalShadows
+   Lighting.GlobalShadows = false
+
+   -- 3. Убираем туман
+   self.origFogEnd   = Lighting.FogEnd
+   self.origFogStart = Lighting.FogStart
+   Lighting.FogEnd   = 1e6
+   Lighting.FogStart = 1e6
+
+   -- 4. Минимальная атмосфера
+   for _, v in pairs(Lighting:GetChildren()) do
+      if v:IsA("Atmosphere") or v:IsA("BlurEffect")
+      or v:IsA("DepthOfFieldEffect") or v:IsA("SunRaysEffect")
+      or v:IsA("ColorCorrectionEffect") or v:IsA("BloomEffect") then
+         v.Enabled = false
+      end
+   end
+
+   -- 5. Отключаем все ParticleEmitter / Smoke / Fire в workspace
+   for _, v in pairs(workspace:GetDescendants()) do
+      if v:IsA("ParticleEmitter") or v:IsA("Smoke")
+      or v:IsA("Fire") or v:IsA("Sparkles") or v:IsA("Trail") then
+         if v.Enabled then
+            v.Enabled = false
+            table.insert(self.removedObjs, v)
+         end
+      end
+   end
+
+   -- 6. Понижаем качество рендера если API доступен
+   pcall(function()
+      settings().Rendering.QualityLevel = 1  -- минимум
+   end)
+
+   -- 7. Убираем Decal / Texture со всех Part (жрут VRAM)
+   for _, v in pairs(workspace:GetDescendants()) do
+      if v:IsA("Decal") or v:IsA("Texture") then
+         pcall(function()
+            v.Transparency = 1   -- прячем, не удаляем (чтобы вернуть)
+            table.insert(self.removedObjs, {obj=v, prop="Transparency", orig=0})
+         end)
+      end
+   end
+
+   notify("⚡ FPS Booster", "Включён — тени/частицы/туман убраны", 3)
+end
+
+function FPSBooster:Disable()
+   if not self.active then return end
+   self.active = false
+
+   -- Возвращаем тени
+   Lighting.GlobalShadows = self.origShadows
+   Lighting.FogEnd        = self.origFogEnd   or origFogEnd
+   Lighting.FogStart      = self.origFogStart or 0
+
+   -- Возвращаем атмосферу
+   for _, v in pairs(Lighting:GetChildren()) do
+      if v:IsA("Atmosphere") or v:IsA("BlurEffect")
+      or v:IsA("DepthOfFieldEffect") or v:IsA("SunRaysEffect")
+      or v:IsA("ColorCorrectionEffect") or v:IsA("BloomEffect") then
+         v.Enabled = true
+      end
+   end
+
+   -- Возвращаем частицы
+   for _, v in pairs(self.removedObjs) do
+      pcall(function()
+         if type(v) == "table" then
+            v.obj[v.prop] = v.orig
+         else
+            v.Enabled = true
+         end
+      end)
+   end
+   self.removedObjs = {}
+
+   -- Возвращаем качество
+   pcall(function()
+      settings().Rendering.QualityLevel = self.origQuality
+   end)
+
+   notify("⚡ FPS Booster", "Выключён — настройки восстановлены", 3)
+end
+
+-- Добавляем в уже существующий TabWorld
+TabWorld:CreateSection("⚡ Производительность")
+
+TabWorld:CreateToggle({
+   Name = "⚡ FPS Booster (тени/частицы/туман выкл.)",
+   CurrentValue = false,
+   Callback = function(v)
+      if v then FPSBooster:Enable() else FPSBooster:Disable() end
+   end
+})
+
+TabWorld:CreateToggle({
+   Name = "🖼️ Убрать текстуры (ещё больше FPS)",
+   CurrentValue = false,
+   Callback = function(v)
+      -- Отдельный тоггл — меняем SurfaceAppearance и материал всех Part
+      for _, p in pairs(workspace:GetDescendants()) do
+         if p:IsA("BasePart") then
+            if v then
+               p.Material = Enum.Material.SmoothPlastic
+            end
+         end
+         if p:IsA("SurfaceAppearance") then
+            p.Enabled = not v
+         end
+      end
+      notify("🖼️ Текстуры", v and "Убраны (SmoothPlastic)" or "Восстановлены", 2)
+   end
+})
+
+TabWorld:CreateButton({
+   Name = "🗑️ Убрать тени прямо сейчас",
+   Callback = function()
+      Lighting.GlobalShadows = false
+      notify("💡 FPS", "Тени отключены", 2)
+   end
+})
+
+-- ────────────────────────────────────────────────────────────────
+--  WATERMARK  —  FPS + Ping + Player  в углу экрана
+--  Реализован через Drawing API (не зависит от CoreGui)
+-- ────────────────────────────────────────────────────────────────
+local Watermark = {}
+Watermark.visible = true
+Watermark.conn    = nil
+
+-- Фон
+Watermark.bg = Drawing.new("Square")
+Watermark.bg.Filled    = true
+Watermark.bg.Color     = Color3.fromRGB(15, 15, 20)
+Watermark.bg.Transparency = 0.35
+Watermark.bg.Size      = Vector2.new(260, 28)
+Watermark.bg.Position  = Vector2.new(10, 10)
+Watermark.bg.ZIndex    = 10
+Watermark.bg.Visible   = true
+
+-- Цветная полоска сверху
+Watermark.bar = Drawing.new("Square")
+Watermark.bar.Filled    = true
+Watermark.bar.Color     = Color3.fromRGB(120, 80, 255)
+Watermark.bar.Transparency = 0
+Watermark.bar.Size      = Vector2.new(260, 3)
+Watermark.bar.Position  = Vector2.new(10, 10)
+Watermark.bar.ZIndex    = 11
+Watermark.bar.Visible   = true
+
+-- Текст
+Watermark.txt = Drawing.new("Text")
+Watermark.txt.Text     = "🌙 MistyDany  |  FPS: --  |  Ping: --"
+Watermark.txt.Size     = 14
+Watermark.txt.Font     = Drawing.Fonts.UI
+Watermark.txt.Color    = Color3.fromRGB(220, 220, 220)
+Watermark.txt.Outline  = true
+Watermark.txt.OutlineColor = Color3.fromRGB(0, 0, 0)
+Watermark.txt.Position = Vector2.new(16, 17)
+Watermark.txt.ZIndex   = 12
+Watermark.txt.Visible  = true
+
+-- Счётчик FPS через замер времени между кадрами
+local fpsSamples    = {}
+local fpsMaxSamples = 20   -- усредняем по 20 кадрам
+
+local function getAverageFPS()
+   local now = tick()
+   table.insert(fpsSamples, now)
+   -- Удаляем старые сэмплы (старше 1 сек)
+   while fpsSamples[1] and (now - fpsSamples[1]) > 1 do
+      table.remove(fpsSamples, 1)
+   end
+   return #fpsSamples
+end
+
+local function getPing()
+   -- Стандартный способ получить пинг через Stats
+   local ok, v = pcall(function()
+      return math.floor(game:GetService("Stats").Network.ServerStatsItem["Data Ping"]:GetValue())
+   end)
+   return ok and tostring(v).." ms" or "N/A"
+end
+
+Watermark.conn = RunService.RenderStepped:Connect(function()
+   if not Watermark.visible then return end
+   local fps  = getAverageFPS()
+   local ping = getPing()
+
+   -- Цвет FPS: зелёный если >50, жёлтый >30, красный <30
+   local fpsColor
+   if fps >= 50 then
+      fpsColor = "✅"
+   elseif fps >= 30 then
+      fpsColor = "🟡"
+   else
+      fpsColor = "🔴"
+   end
+
+   Watermark.txt.Text = string.format(
+      "🌙 MistyDany  |  %s%d FPS  |  🌐 %s",
+      fpsColor, fps, ping
+   )
+
+   -- Радужная полоска — плавная смена цвета по времени
+   local t   = tick() % 3 / 3
+   local hue = t
+   Watermark.bar.Color = Color3.fromHSV(hue, 0.8, 1)
 end)
 
-local TPScroll = Instance.new("ScrollingFrame", MoveTab)
-TPScroll.Size = UDim2.new(1, -8, 0, 160)
-TPScroll.BackgroundColor3 = Color3.fromRGB(22, 22, 30)
-TPScroll.BorderSizePixel = 0
-TPScroll.ScrollBarThickness = 4
-TPScroll.CanvasSize = UDim2.new(0, 0, 0, 0)
-Instance.new("UICorner", TPScroll).CornerRadius = UDim.new(0, 6)
-local TPList = Instance.new("UIListLayout", TPScroll)
-TPList.Padding = UDim.new(0, 4)
+function Watermark:Toggle(v)
+   self.visible       = v
+   self.bg.Visible    = v
+   self.bar.Visible   = v
+   self.txt.Visible   = v
+end
 
-local function RefreshTPList()
-    for _, c in ipairs(TPScroll:GetChildren()) do
-        if c:IsA("TextButton") then c:Destroy() end
-    end
-    for _, plr in ipairs(Players:GetPlayers()) do
-        if plr ~= LocalPlayer then
-            local b = Instance.new("TextButton", TPScroll)
-            b.Size = UDim2.new(1, -8, 0, 28)
-            b.BackgroundColor3 = Color3.fromRGB(40, 40, 52)
-            b.Text = "  TP → " .. plr.DisplayName
-            b.TextColor3 = Color3.fromRGB(230, 230, 230)
-            b.Font = Enum.Font.GothamSemibold
-            b.TextSize = 12
-            b.TextXAlignment = Enum.TextXAlignment.Left
-            b.AutoButtonColor = false
-            Instance.new("UICorner", b).CornerRadius = UDim.new(0, 4)
-            b.MouseButton1Click:Connect(function()
-                local char, tChar = LocalPlayer.Character, plr.Character
-                if not char or not tChar then return end
-                local hrp = char:FindFirstChild("HumanoidRootPart")
-                local tHrp = tChar:FindFirstChild("HumanoidRootPart")
-                if hrp and tHrp then hrp.CFrame = tHrp.CFrame * CFrame.new(0, 0, -3) end
+-- ────────────────────────────────────────────────────────────────
+--  SERVER TAB  —  полностью новая вкладка
+-- ────────────────────────────────────────────────────────────────
+local TabServer = Window:CreateTab("🖥️ Сервер", 4483362458)
+
+TabServer:CreateSection("📊 Информация")
+
+-- Показать инфо о сервере одной кнопкой
+TabServer:CreateButton({
+   Name = "📊 Показать инфо о сервере",
+   Callback = function()
+      local playerCount = #Players:GetPlayers()
+      local ping = getPing()
+      local fps  = getAverageFPS()
+      local info = string.format(
+         "PlaceId: %s\nJobId: %s\nИгроков: %d\nFPS: %d\nPing: %s",
+         tostring(game.PlaceId),
+         tostring(game.JobId):sub(1, 18) .. "...",
+         playerCount, fps, ping
+      )
+      notify("🖥️ Сервер", info, 8)
+      setclipboard(game.JobId)
+   end
+})
+
+TabServer:CreateButton({
+   Name = "🔄 Перезайти на сервер (Rejoin)",
+   Callback = function()
+      notify("🔄 Rejoin", "Перезаходим...", 2)
+      task.wait(1.5)
+      local TeleportService = game:GetService("TeleportService")
+      TeleportService:Teleport(game.PlaceId, lp)
+   end
+})
+
+TabServer:CreateSection("🌐 Смена сервера")
+
+TabServer:CreateButton({
+   Name = "🎲 Перейти на случайный сервер",
+   Callback = function()
+      notify("🌐 Сервер", "Ищем случайный сервер...", 3)
+      local TeleportService = game:GetService("TeleportService")
+      local HttpService     = game:GetService("HttpService")
+      local ok, servers = pcall(function()
+         local url = string.format(
+            "https://games.roblox.com/v1/games/%d/servers/Public?sortOrder=Asc&limit=100",
+            game.PlaceId
+         )
+         local raw  = game:HttpGet(url)
+         return HttpService:JSONDecode(raw).data
+      end)
+      if not ok or not servers or #servers == 0 then
+         notify("🌐 Сервер", "Не удалось получить список серверов", 3)
+         return
+      end
+      -- Фильтруем — не наш текущий сервер
+      local filtered = {}
+      for _, s in ipairs(servers) do
+         if s.id ~= game.JobId and s.playing > 0 then
+            table.insert(filtered, s)
+         end
+      end
+      if #filtered == 0 then
+         notify("🌐 Сервер", "Других серверов нет", 3)
+         return
+      end
+      local pick = filtered[math.random(1, #filtered)]
+      notify("🌐 Сервер", "Переходим... Игроков: " .. pick.playing, 2)
+      task.wait(1)
+      TeleportService:TeleportToPlaceInstance(game.PlaceId, pick.id, lp)
+   end
+})
+
+TabServer:CreateButton({
+   Name = "👥 Перейти на наименее заполненный сервер",
+   Callback = function()
+      notify("🌐 Сервер", "Ищем пустой сервер...", 3)
+      local TeleportService = game:GetService("TeleportService")
+      local HttpService     = game:GetService("HttpService")
+      local ok, servers = pcall(function()
+         local url = string.format(
+            "https://games.roblox.com/v1/games/%d/servers/Public?sortOrder=Asc&limit=100",
+            game.PlaceId
+         )
+         return HttpService:JSONDecode(game:HttpGet(url)).data
+      end)
+      if not ok or not servers or #servers == 0 then
+         notify("🌐 Сервер", "Не удалось получить список", 3); return
+      end
+      local best = nil
+      for _, s in ipairs(servers) do
+         if s.id ~= game.JobId and s.playing > 0 then
+            if not best or s.playing < best.playing then best = s end
+         end
+      end
+      if not best then notify("🌐 Сервер", "Нет доступных серверов", 3); return end
+      notify("🌐 Сервер", "Самый пустой: " .. best.playing .. " игроков", 2)
+      task.wait(1)
+      TeleportService:TeleportToPlaceInstance(game.PlaceId, best.id, lp)
+   end
+})
+
+TabServer:CreateSection("📺 Водяной знак")
+
+TabServer:CreateToggle({
+   Name = "📺 Показывать водяной знак (FPS + Ping)",
+   CurrentValue = true,
+   Callback = function(v)
+      Watermark:Toggle(v)
+   end
+})
+
+-- ════════════════════════════════════════════════════════════════
+--  ██  НОВЫЕ СИСТЕМЫ v3.2  ████████████████████████████████████
+-- ════════════════════════════════════════════════════════════════
+
+-- ────────────────────────────────────────────────────────────────
+--  СЕРВИСЫ (дополнительные)
+-- ────────────────────────────────────────────────────────────────
+local SoundService     = game:GetService("SoundService")
+local HttpService      = game:GetService("HttpService")
+local ContextActionSvc = game:GetService("ContextActionService")
+
+-- ────────────────────────────────────────────────────────────────
+--  ПЕРЕМЕННЫЕ НОВЫХ СИСТЕМ
+-- ────────────────────────────────────────────────────────────────
+local clickTpEnabled    = false
+local clickTpConn       = nil
+local freecamEnabled    = false
+local freecamConn       = nil
+local freecamPart       = nil
+local crosshairEnabled  = false
+local crosshairLines    = {}
+local hitSoundEnabled   = false
+local hitSoundId        = "rbxassetid://6042053626"
+local autoSprintEnabled = false
+local autoSprintConn    = nil
+local rainbowEnabled    = false
+local rainbowConn       = nil
+local spectateTarget    = nil
+local spectateConn      = nil
+local scriptLog         = {}   -- лог запущенных скриптов
+local savedScripts      = {}   -- сохранённые пользовательские скрипты
+
+-- ────────────────────────────────────────────────────────────────
+--  СОХРАНЕНИЕ СКРИПТОВ  (writefile / readfile)
+--  Хранит список скриптов в JSON файле на диске эксплойта
+-- ────────────────────────────────────────────────────────────────
+local SCRIPTS_FILE = "MistyDany_Scripts.json"
+
+local function saveScriptsToDisk()
+   local ok = pcall(function()
+      writefile(SCRIPTS_FILE, HttpService:JSONEncode(savedScripts))
+   end)
+   if not ok then
+      -- writefile недоступен — тихо игнорируем
+   end
+end
+
+local function loadScriptsFromDisk()
+   local ok, data = pcall(function()
+      if isfile(SCRIPTS_FILE) then
+         return HttpService:JSONDecode(readfile(SCRIPTS_FILE))
+      end
+      return {}
+   end)
+   if ok and type(data) == "table" then
+      savedScripts = data
+   end
+end
+
+-- Загружаем сохранённые скрипты при старте
+loadScriptsFromDisk()
+
+-- Функция запуска скрипта с pcall + логом
+local function runScript(entry)
+   local name   = entry.Name   or "Unknown"
+   local source = entry.Source or ""
+   local stype  = entry.Type   or "loadstring"
+
+   -- Лог
+   local logEntry = {
+      Name = name,
+      Time = os.date("%H:%M:%S"),
+      OK   = false,
+      Err  = ""
+   }
+   table.insert(scriptLog, 1, logEntry)
+   if #scriptLog > 30 then table.remove(scriptLog) end
+
+   notify("📝 Скрипт", "Запускаем: " .. name, 2)
+
+   local ok, err = pcall(function()
+      if stype == "loadstring" then
+         loadstring(game:HttpGet(source, true))()
+      elseif stype == "code" then
+         loadstring(source)()
+      end
+   end)
+
+   logEntry.OK  = ok
+   logEntry.Err = ok and "" or tostring(err):sub(1, 80)
+
+   if ok then
+      notify("✅ Скрипт", name .. " запущен", 2)
+   else
+      notify("❌ Ошибка", name .. ": " .. logEntry.Err, 5)
+   end
+end
+
+-- ────────────────────────────────────────────────────────────────
+--  CLICK TELEPORT
+-- ────────────────────────────────────────────────────────────────
+local function startClickTp()
+   if clickTpConn then clickTpConn:Disconnect() end
+   clickTpConn = UserInputService.InputBegan:Connect(function(input, gpe)
+      if gpe then return end
+      if input.UserInputType ~= Enum.UserInputType.MouseButton1 then return end
+      if not clickTpEnabled then return end
+      local hrp = getHRP()
+      if not hrp then return end
+      local unitRay = cam:ScreenPointToRay(
+         input.Position.X, input.Position.Y
+      )
+      local rayParams = RaycastParams.new()
+      rayParams.FilterType = Enum.RaycastFilterType.Exclude
+      rayParams.FilterDescendantsInstances = {lp.Character}
+      local result = workspace:Raycast(
+         unitRay.Origin, unitRay.Direction * 1000, rayParams
+      )
+      if result then
+         hrp.CFrame = CFrame.new(result.Position + Vector3.new(0, 3, 0))
+         notify("🎯 Click TP", "Телепорт!", 1)
+      end
+   end)
+end
+
+-- ────────────────────────────────────────────────────────────────
+--  FREECAM
+-- ────────────────────────────────────────────────────────────────
+local freecamSpeed  = 30
+local freecamSprint = false
+
+local function startFreecam()
+   -- Создаём невидимую Part как якорь камеры
+   freecamPart = Instance.new("Part")
+   freecamPart.Anchored      = true
+   freecamPart.CanCollide    = false
+   freecamPart.Transparency  = 1
+   freecamPart.Size          = Vector3.new(1, 1, 1)
+   freecamPart.CFrame        = cam.CFrame
+   freecamPart.Parent        = workspace
+
+   -- Переключаем тип камеры
+   local origType = cam.CameraType
+   cam.CameraType    = Enum.CameraType.Scriptable
+   cam.CameraSubject = freecamPart
+
+   local lastPos = cam.CFrame
+
+   freecamConn = RunService.RenderStepped:Connect(function(dt)
+      if not freecamEnabled then return end
+      local UIS  = UserInputService
+      local cf   = cam.CFrame
+      local spd  = freecamSpeed * dt
+      if UIS:IsKeyDown(Enum.KeyCode.LeftShift) then spd = spd * 3 end
+
+      local move = Vector3.new()
+      if UIS:IsKeyDown(Enum.KeyCode.W) then move += cf.LookVector  end
+      if UIS:IsKeyDown(Enum.KeyCode.S) then move -= cf.LookVector  end
+      if UIS:IsKeyDown(Enum.KeyCode.A) then move -= cf.RightVector end
+      if UIS:IsKeyDown(Enum.KeyCode.D) then move += cf.RightVector end
+      if UIS:IsKeyDown(Enum.KeyCode.E) or UIS:IsKeyDown(Enum.KeyCode.Space) then
+         move += Vector3.new(0, 1, 0)
+      end
+      if UIS:IsKeyDown(Enum.KeyCode.Q) or UIS:IsKeyDown(Enum.KeyCode.LeftControl) then
+         move -= Vector3.new(0, 1, 0)
+      end
+
+      if move.Magnitude > 0 then
+         cam.CFrame = cam.CFrame + move.Unit * spd
+      end
+   end)
+
+   -- Восстанавливаем тип камеры при выключении
+   _G.FreecamOrigType = origType
+end
+
+local function stopFreecam()
+   if freecamConn then freecamConn:Disconnect(); freecamConn = nil end
+   if freecamPart then freecamPart:Destroy(); freecamPart = nil end
+   cam.CameraType = _G.FreecamOrigType or Enum.CameraType.Custom
+   local char = getChar()
+   if char then
+      local hrp = char:FindFirstChild("HumanoidRootPart")
+      if hrp then cam.CameraSubject = hrp end
+   end
+end
+
+-- ────────────────────────────────────────────────────────────────
+--  CROSSHAIR  (Drawing API)
+-- ────────────────────────────────────────────────────────────────
+local crosshairColor = Color3.fromRGB(255, 255, 255)
+local crosshairSize  = 10
+local crosshairGap   = 4
+local crosshairThick = 1.5
+
+local function buildCrosshair()
+   -- 4 линии: верх, низ, лево, право
+   for i = 1, 4 do
+      local l = Drawing.new("Line")
+      l.Color     = crosshairColor
+      l.Thickness = crosshairThick
+      l.ZIndex    = 20
+      l.Visible   = false
+      crosshairLines[i] = l
+   end
+   -- Центральная точка
+   local dot = Drawing.new("Circle")
+   dot.Color   = crosshairColor
+   dot.Radius  = 1.5
+   dot.Filled  = true
+   dot.ZIndex  = 20
+   dot.Visible = false
+   crosshairLines[5] = dot
+end
+buildCrosshair()
+
+local crosshairConn = nil
+local function startCrosshair()
+   if crosshairConn then crosshairConn:Disconnect() end
+   crosshairConn = RunService.RenderStepped:Connect(function()
+      if not crosshairEnabled then return end
+      local vp  = cam.ViewportSize
+      local cx  = vp.X / 2
+      local cy  = vp.Y / 2
+      local g   = crosshairGap
+      local s   = crosshairSize
+
+      -- Верх
+      crosshairLines[1].From = Vector2.new(cx, cy - g - s)
+      crosshairLines[1].To   = Vector2.new(cx, cy - g)
+      -- Низ
+      crosshairLines[2].From = Vector2.new(cx, cy + g)
+      crosshairLines[2].To   = Vector2.new(cx, cy + g + s)
+      -- Лево
+      crosshairLines[3].From = Vector2.new(cx - g - s, cy)
+      crosshairLines[3].To   = Vector2.new(cx - g,     cy)
+      -- Право
+      crosshairLines[4].From = Vector2.new(cx + g,     cy)
+      crosshairLines[4].To   = Vector2.new(cx + g + s, cy)
+      -- Точка
+      crosshairLines[5].Position = Vector2.new(cx, cy)
+
+      for _, l in ipairs(crosshairLines) do
+         l.Color   = crosshairColor
+         l.Visible = true
+      end
+   end)
+end
+startCrosshair()
+
+local function hideCrosshair()
+   for _, l in ipairs(crosshairLines) do l.Visible = false end
+end
+
+-- ────────────────────────────────────────────────────────────────
+--  HIT SOUND  (звук при попадании по хуманоиду)
+-- ────────────────────────────────────────────────────────────────
+local hitSoundInst = Instance.new("Sound")
+hitSoundInst.SoundId  = hitSoundId
+hitSoundInst.Volume   = 0.6
+hitSoundInst.RollOffMaxDistance = 0
+hitSoundInst.Parent   = SoundService
+
+local hitSoundConn = nil
+local function setupHitSound()
+   -- Подключаем к каждому игроку — слушаем урон
+   for _, p in ipairs(Players:GetPlayers()) do
+      if p ~= lp and p.Character then
+         local hum = p.Character:FindFirstChildOfClass("Humanoid")
+         if hum then
+            hum.HealthChanged:Connect(function(hp)
+               if hitSoundEnabled and hp < hum.MaxHealth then
+                  hitSoundInst:Play()
+               end
             end)
-        end
-    end
-    TPScroll.CanvasSize = UDim2.new(0, 0, 0, TPList.AbsoluteContentSize.Y + 8)
-end
-Players.PlayerAdded:Connect(RefreshTPList)
-Players.PlayerRemoving:Connect(RefreshTPList)
-task.spawn(RefreshTPList)
-
---------------------------------------------------------------------------------
--- ВКЛАДКА ДРУЗЬЯ
---------------------------------------------------------------------------------
-local FriendsScroll = Instance.new("ScrollingFrame", FriendsTab)
-FriendsScroll.Size = UDim2.new(1, -8, 1, -8)
-FriendsScroll.BackgroundTransparency = 1
-FriendsScroll.BorderSizePixel = 0
-FriendsScroll.ScrollBarThickness = 4
-local FriendsList = Instance.new("UIListLayout", FriendsScroll)
-FriendsList.Padding = UDim.new(0, 6)
-FriendsList:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
-    FriendsScroll.CanvasSize = UDim2.new(0, 0, 0, FriendsList.AbsoluteContentSize.Y + 10)
-end)
-
-local function RefreshFriendsList()
-    for _, c in ipairs(FriendsScroll:GetChildren()) do
-        if c:IsA("Frame") then c:Destroy() end
-    end
-    for _, plr in ipairs(Players:GetPlayers()) do
-        if plr ~= LocalPlayer then
-            local item = Instance.new("Frame", FriendsScroll)
-            item.Size = UDim2.new(1, -8, 0, 32)
-            item.BackgroundColor3 = Color3.fromRGB(28, 28, 36)
-            item.BorderSizePixel = 0
-            Instance.new("UICorner", item).CornerRadius = UDim.new(0, 6)
-            local nm = Instance.new("TextLabel", item)
-            nm.Size = UDim2.new(1, -75, 1, 0)
-            nm.Position = UDim2.new(0, 8, 0, 0)
-            nm.BackgroundTransparency = 1
-            nm.Text = plr.DisplayName .. " (@" .. plr.Name .. ")"
-            nm.TextColor3 = Settings.Friends[plr.UserId] and Color3.fromRGB(0, 255, 120) or Color3.fromRGB(200, 200, 200)
-            nm.TextSize = 11
-            nm.Font = Enum.Font.GothamSemibold
-            nm.TextXAlignment = Enum.TextXAlignment.Left
-            nm.TextTruncate = Enum.TextTruncate.AtEnd
-            local fb = Instance.new("TextButton", item)
-            fb.Size = UDim2.new(0, 60, 0, 22)
-            fb.Position = UDim2.new(1, -64, 0.5, -11)
-            fb.BackgroundColor3 = Settings.Friends[plr.UserId] and Color3.fromRGB(0, 180, 80) or Color3.fromRGB(50, 50, 60)
-            fb.Text = Settings.Friends[plr.UserId] and "Friend" or "Add"
-            fb.TextColor3 = Color3.fromRGB(255, 255, 255)
-            fb.Font = Enum.Font.GothamBold
-            fb.TextSize = 10
-            fb.AutoButtonColor = false
-            Instance.new("UICorner", fb).CornerRadius = UDim.new(0, 4)
-            fb.MouseButton1Click:Connect(function()
-                if Settings.Friends[plr.UserId] then Settings.Friends[plr.UserId] = nil
-                else Settings.Friends[plr.UserId] = true end
-                RefreshFriendsList()
-                RequestSave()
+         end
+      end
+   end
+   Players.PlayerAdded:Connect(function(p)
+      p.CharacterAdded:Connect(function(char)
+         local hum = char:WaitForChild("Humanoid", 5)
+         if hum then
+            hum.HealthChanged:Connect(function(hp)
+               if hitSoundEnabled and hp < hum.MaxHealth then
+                  hitSoundInst:Play()
+               end
             end)
-        end
-    end
+         end
+      end)
+   end)
 end
-Players.PlayerAdded:Connect(RefreshFriendsList)
-Players.PlayerRemoving:Connect(RefreshFriendsList)
-task.spawn(RefreshFriendsList)
+setupHitSound()
 
---------------------------------------------------------------------------------
--- ПРИЦЕЛ
---------------------------------------------------------------------------------
-local Crosshair = Instance.new("Frame")
-Crosshair.Size = UDim2.new(0, 40, 0, 40)
-Crosshair.Position = UDim2.new(0.5, -20, 0.5, -20)
-Crosshair.BackgroundTransparency = 1
-Crosshair.Visible = Settings.Crosshair
-Crosshair.Parent = ScreenGui
-for _, d in ipairs({
-    {UDim2.new(0, 2, 0, 12), UDim2.new(0.5, -1, 0, 0)},
-    {UDim2.new(0, 2, 0, 12), UDim2.new(0.5, -1, 1, -12)},
-    {UDim2.new(0, 12, 0, 2), UDim2.new(0, 0, 0.5, -1)},
-    {UDim2.new(0, 12, 0, 2), UDim2.new(1, -12, 0.5, -1)},
-}) do
-    local l = Instance.new("Frame", Crosshair)
-    l.Size = d[1]; l.Position = d[2]
-    l.BackgroundColor3 = Color3.fromRGB(0, 255, 100)
-    l.BorderSizePixel = 0
+-- ────────────────────────────────────────────────────────────────
+--  AUTO SPRINT  (автоматически зажимает Shift)
+-- ────────────────────────────────────────────────────────────────
+local function startAutoSprint()
+   if autoSprintConn then autoSprintConn:Disconnect() end
+   autoSprintConn = RunService.Heartbeat:Connect(function()
+      if not autoSprintEnabled then return end
+      local h = getHum()
+      if h and h.MoveDirection.Magnitude > 0 then
+         h.WalkSpeed = math.max(h.WalkSpeed, speedhackVal)
+      end
+   end)
+end
+startAutoSprint()
+
+-- ────────────────────────────────────────────────────────────────
+--  RAINBOW CHARACTER  (плавная смена цвета тела)
+-- ────────────────────────────────────────────────────────────────
+local function startRainbow()
+   if rainbowConn then rainbowConn:Disconnect() end
+   rainbowConn = RunService.Heartbeat:Connect(function()
+      if not rainbowEnabled then return end
+      local hue  = tick() % 5 / 5
+      local col  = Color3.fromHSV(hue, 1, 1)
+      local char = getChar()
+      if not char then return end
+      for _, p in pairs(char:GetDescendants()) do
+         if p:IsA("BasePart") and p.Name ~= "HumanoidRootPart" then
+            p.Color = col
+         end
+      end
+   end)
+end
+startRainbow()
+
+-- ────────────────────────────────────────────────────────────────
+--  SPECTATE  (наблюдение через камеру игрока)
+-- ────────────────────────────────────────────────────────────────
+local function startSpectate(target)
+   if spectateConn then spectateConn:Disconnect() end
+   spectateTarget = target
+   local origType = cam.CameraType
+   _G.SpectateOrigType = origType
+
+   spectateConn = RunService.RenderStepped:Connect(function()
+      if not spectateTarget then return end
+      local tc   = spectateTarget.Character
+      local tHRP = tc and tc:FindFirstChild("HumanoidRootPart")
+      if not tHRP then return end
+      cam.CameraType    = Enum.CameraType.Scriptable
+      cam.CFrame        = tHRP.CFrame * CFrame.new(0, 2, -6) *
+                          CFrame.Angles(0, math.pi, 0)
+   end)
+   notify("📡 Spectate", "Наблюдаем за " .. target.Name, 2)
 end
 
---------------------------------------------------------------------------------
--- FREECAM
---------------------------------------------------------------------------------
-local freeCamConn
-local function StartFreeCam()
-    Camera.CameraType = Enum.CameraType.Scriptable
-    freeCamConn = RunService.RenderStepped:Connect(function()
-        if not Settings.FreeCam then return end
-        local camCF = Camera.CFrame
-        local move = Vector3.zero
-        if UserInputService:IsKeyDown(Enum.KeyCode.W) then move = move + camCF.LookVector end
-        if UserInputService:IsKeyDown(Enum.KeyCode.S) then move = move - camCF.LookVector end
-        if UserInputService:IsKeyDown(Enum.KeyCode.D) then move = move + camCF.RightVector end
-        if UserInputService:IsKeyDown(Enum.KeyCode.A) then move = move - camCF.RightVector end
-        if UserInputService:IsKeyDown(Enum.KeyCode.Space) then move = move + Vector3.new(0,1,0) end
-        if UserInputService:IsKeyDown(Enum.KeyCode.LeftControl) then move = move - Vector3.new(0,1,0) end
-        if move.Magnitude > 0 then Camera.CFrame = camCF + move.Unit end
-    end)
-end
-local function StopFreeCam()
-    if freeCamConn then freeCamConn:Disconnect() freeCamConn = nil end
-    Camera.CameraType = Enum.CameraType.Custom
-    local char = LocalPlayer.Character
-    if char and char:FindFirstChild("Humanoid") then Camera.CameraSubject = char.Humanoid end
+local function stopSpectate()
+   if spectateConn then spectateConn:Disconnect(); spectateConn = nil end
+   spectateTarget  = nil
+   cam.CameraType  = _G.SpectateOrigType or Enum.CameraType.Custom
+   local char = getChar()
+   if char then
+      local hrp = char:FindFirstChild("HumanoidRootPart")
+      if hrp then cam.CameraSubject = hrp end
+   end
+   notify("📡 Spectate", "Наблюдение остановлено", 2)
 end
 
---------------------------------------------------------------------------------
--- HIT SOUND
---------------------------------------------------------------------------------
-local hitSoundTracked = {}
-local function TrackHumanoid(char)
-    local hum = char:FindFirstChildOfClass("Humanoid")
-    if not hum then return end
-    local plr = Players:GetPlayerFromCharacter(char)
-    if not plr or plr == LocalPlayer then return end
-    if hitSoundTracked[hum] then return end
-    hitSoundTracked[hum] = hum.Health
-    hum:GetPropertyChangedSignal("Health"):Connect(function()
-        if Settings.HitSound and hum.Health < hitSoundTracked[hum] then
-            local s = Instance.new("Sound")
-            s.SoundId = "rbxasset://sounds/electronicpingshort.wav"
-            s.Volume = 2
-            s.Parent = SoundService
-            s:Play()
-            Debris:AddItem(s, 1)
-        end
-        hitSoundTracked[hum] = hum.Health
-    end)
-end
-for _, p in ipairs(Players:GetPlayers()) do
-    if p ~= LocalPlayer then
-        if p.Character then TrackHumanoid(p.Character) end
-        p.CharacterAdded:Connect(TrackHumanoid)
-    end
-end
-Players.PlayerAdded:Connect(function(p)
-    if p ~= LocalPlayer then p.CharacterAdded:Connect(TrackHumanoid) end
-end)
+-- ════════════════════════════════════════════════════════════════
+--  ██  НОВЫЕ ВКЛАДКИ  ████████████████████████████████████████
+-- ════════════════════════════════════════════════════════════════
 
---------------------------------------------------------------------------------
--- ВКЛАДКА ФИЧИ
---------------------------------------------------------------------------------
-CreateToggle(FeatTab, "FreeCam (Свободная камера)", Settings.FreeCam, function(v)
-    Settings.FreeCam = v
-    if v then StartFreeCam() else StopFreeCam() end
-end)
-CreateToggle(FeatTab, "Прицел на экране", Settings.Crosshair, function(v)
-    Settings.Crosshair = v
-    Crosshair.Visible = v
-end)
-CreateToggle(FeatTab, "Авто-спринт", Settings.AutoSprint, function(v) Settings.AutoSprint = v end)
-CreateNumber(FeatTab, "Скорость спринта", Settings.AutoSprintSpeed, function(n)
-    Settings.AutoSprintSpeed = math.clamp(n, 16, 200)
-end)
-CreateToggle(FeatTab, "Звук попадания", Settings.HitSound, function(v) Settings.HitSound = v end)
+-- ╔══════════════════════╗
+-- ║  ВИЗУАЛЬНЫЕ ФИЧИ     ║
+-- ╚══════════════════════╝
+local TabExtras = Window:CreateTab("🎯 Фичи", 4483362458)
 
---------------------------------------------------------------------------------
--- ВКЛАДКА ИГРОК
---------------------------------------------------------------------------------
-CreateToggle(PlayerTab, "Бесконечный прыжок", Settings.InfiniteJump, function(v) Settings.InfiniteJump = v end)
-CreateNumber(PlayerTab, "Сила прыжка", Settings.JumpPower, function(n)
-    Settings.JumpPower = math.clamp(n, 0, 500)
-    local char = LocalPlayer.Character
-    if char then
-        local hum = char:FindFirstChildOfClass("Humanoid")
-        if hum then hum.UseJumpPower = true; hum.JumpPower = Settings.JumpPower end
-    end
-end)
-CreateNumber(PlayerTab, "Скорость ходьбы", Settings.WalkSpeed, function(n)
-    Settings.WalkSpeed = math.clamp(n, 0, 500)
-end)
-CreateToggle(PlayerTab, "Noclip (сквозь стены)", Settings.Noclip, function(v)
-    Settings.Noclip = v
-    if v then StartNoclip() else StopNoclip() end
-end)
-CreateAction(PlayerTab, "🔄 Сбросить (16 / 50)", function()
-    Settings.WalkSpeed = 16
-    Settings.JumpPower = 50
-    Settings.AutoSprint = false
-    local char = LocalPlayer.Character
-    if char then
-        local hum = char:FindFirstChildOfClass("Humanoid")
-        if hum then
-            hum.WalkSpeed = 16
-            hum.UseJumpPower = true
-            hum.JumpPower = 50
-        end
-    end
-    RequestSave()
-end)
+-- ── Click Teleport ──────────────────────────────────────────────
+TabExtras:CreateSection("🎯 Click Teleport")
 
-RunService.Heartbeat:Connect(function()
-    local char = LocalPlayer.Character
-    if not char then return end
-    local hum = char:FindFirstChildOfClass("Humanoid")
-    if not hum then return end
-    local target = Settings.AutoSprint and Settings.AutoSprintSpeed or Settings.WalkSpeed
-    if hum.WalkSpeed ~= target then hum.WalkSpeed = target end
-    if hum.UseJumpPower and hum.JumpPower ~= Settings.JumpPower then
-        hum.JumpPower = Settings.JumpPower
-    end
-end)
+TabExtras:CreateToggle({
+   Name = "🎯 Click Teleport (ЛКМ = телепорт)",
+   CurrentValue = false,
+   Callback = function(v)
+      clickTpEnabled = v
+      if v then
+         startClickTp()
+         notify("🎯 Click TP", "Кликай ЛКМ по поверхности!", 3)
+      else
+         if clickTpConn then clickTpConn:Disconnect(); clickTpConn = nil end
+      end
+   end
+})
 
-UserInputService.JumpRequest:Connect(function()
-    if Settings.InfiniteJump then
-        local char = LocalPlayer.Character
-        if char then
-            local hum = char:FindFirstChildOfClass("Humanoid")
-            if hum then hum:ChangeState(Enum.HumanoidStateType.Jumping) end
-        end
-    end
-end)
+-- ── freecam ───────────────────────────────────────────────────
+local camera = workspace.CurrentCamera
+local CAS = game:GetService("ContextActionService")
+local RunService = game:GetService("RunService")
+-- local lp = game:GetService("Players").LocalPlayer -- Раскомментируй, если нужно
 
---------------------------------------------------------------------------------
--- ВКЛАДКА ИГРОКИ
---------------------------------------------------------------------------------
-local PlayersScroll = Instance.new("ScrollingFrame", PlayersTab)
-PlayersScroll.Size = UDim2.new(1, -8, 0, 140)
-PlayersScroll.BackgroundColor3 = Color3.fromRGB(22, 22, 30)
-PlayersScroll.BorderSizePixel = 0
-PlayersScroll.ScrollBarThickness = 4
-PlayersScroll.CanvasSize = UDim2.new(0, 0, 0, 0)
-Instance.new("UICorner", PlayersScroll).CornerRadius = UDim.new(0, 6)
-local PlayersList = Instance.new("UIListLayout", PlayersScroll)
-PlayersList.Padding = UDim.new(0, 4)
+local oldCameraType
+local oldSubject
+local oldWalkSpeed
+local oldJumpPower
+local oldAutoRotate
+local oldComputerMode
+local oldTouchMode
 
-local InfoPanel = Instance.new("Frame", PlayersTab)
-InfoPanel.Size = UDim2.new(1, -8, 0, 120)
-InfoPanel.BackgroundColor3 = Color3.fromRGB(28, 28, 36)
-InfoPanel.BorderSizePixel = 0
-Instance.new("UICorner", InfoPanel).CornerRadius = UDim.new(0, 6)
+local freecamLoop = nil 
+local lockedCFrame = nil -- Сюда сохраним координаты
 
-local InfoLabel = Instance.new("TextLabel", InfoPanel)
-InfoLabel.Size = UDim2.new(1, -16, 1, -16)
-InfoLabel.Position = UDim2.new(0, 8, 0, 8)
-InfoLabel.BackgroundTransparency = 1
-InfoLabel.Text = "Игрок не выбран"
-InfoLabel.TextColor3 = Color3.fromRGB(220, 220, 220)
-InfoLabel.Font = Enum.Font.Gotham
-InfoLabel.TextSize = 11
-InfoLabel.TextXAlignment = Enum.TextXAlignment.Left
-InfoLabel.TextYAlignment = Enum.TextYAlignment.Top
-InfoLabel.TextWrapped = true
+TabExtras:CreateSection("📷 Freecam")
 
-local SpectateBtn = Instance.new("TextButton", PlayersTab)
-SpectateBtn.Size = UDim2.new(1, -8, 0, 34)
-SpectateBtn.BackgroundColor3 = Color3.fromRGB(0, 130, 200)
-SpectateBtn.Text = "  👁 Следить за игроком"
-SpectateBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
-SpectateBtn.Font = Enum.Font.GothamSemibold
-SpectateBtn.TextSize = 13
-SpectateBtn.TextXAlignment = Enum.TextXAlignment.Left
-SpectateBtn.AutoButtonColor = false
-Instance.new("UICorner", SpectateBtn).CornerRadius = UDim.new(0, 6)
+TabExtras:CreateToggle({
+    Name = "📷 Свободная камера (Freecam)",
+    CurrentValue = false,
 
-local TPToBtn = Instance.new("TextButton", PlayersTab)
-TPToBtn.Size = UDim2.new(1, -8, 0, 34)
-TPToBtn.BackgroundColor3 = Color3.fromRGB(80, 60, 160)
-TPToBtn.Text = "  🎯 TP к игроку"
-TPToBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
-TPToBtn.Font = Enum.Font.GothamSemibold
-TPToBtn.TextSize = 13
-TPToBtn.TextXAlignment = Enum.TextXAlignment.Left
-TPToBtn.AutoButtonColor = false
-Instance.new("UICorner", TPToBtn).CornerRadius = UDim.new(0, 6)
+    Callback = function(v)
+        freecamEnabled = v
 
-local UnselectBtn = Instance.new("TextButton", PlayersTab)
-UnselectBtn.Size = UDim2.new(1, -8, 0, 34)
-UnselectBtn.BackgroundColor3 = Color3.fromRGB(80, 30, 40)
-UnselectBtn.Text = "  ✖ Снять выбор"
-UnselectBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
-UnselectBtn.Font = Enum.Font.GothamSemibold
-UnselectBtn.TextSize = 13
-UnselectBtn.TextXAlignment = Enum.TextXAlignment.Left
-UnselectBtn.AutoButtonColor = false
-Instance.new("UICorner", UnselectBtn).CornerRadius = UDim.new(0, 6)
+        local char = lp.Character
+        local rootPart = char and char:FindFirstChild("HumanoidRootPart")
+        local humanoid = char and char:FindFirstChildOfClass("Humanoid")
 
-local function RefreshPlayersList()
-    for _, c in ipairs(PlayersScroll:GetChildren()) do
-        if c:IsA("TextButton") then c:Destroy() end
-    end
-    for _, plr in ipairs(Players:GetPlayers()) do
-        local b = Instance.new("TextButton", PlayersScroll)
-        b.Size = UDim2.new(1, -8, 0, 30)
-        b.BackgroundColor3 = (Settings.SelectedPlayer == plr)
-            and Color3.fromRGB(0, 130, 200) or Color3.fromRGB(40, 40, 52)
-        b.Text = "  " .. (plr == LocalPlayer and "[Ты] " or "") .. plr.DisplayName
-        b.TextColor3 = Color3.fromRGB(230, 230, 230)
-        b.Font = Enum.Font.GothamSemibold
-        b.TextSize = 12
-        b.TextXAlignment = Enum.TextXAlignment.Left
-        b.AutoButtonColor = false
-        Instance.new("UICorner", b).CornerRadius = UDim.new(0, 4)
-        b.MouseButton1Click:Connect(function()
-            Settings.SelectedPlayer = plr
-            RefreshPlayersList()
-        end)
-    end
-    PlayersScroll.CanvasSize = UDim2.new(0, 0, 0, PlayersList.AbsoluteContentSize.Y + 8)
-end
-Players.PlayerAdded:Connect(RefreshPlayersList)
-Players.PlayerRemoving:Connect(function(p)
-    if Settings.SelectedPlayer == p then Settings.SelectedPlayer = nil end
-    if Settings.Spectating == p then Settings.Spectating = nil end
-    RefreshPlayersList()
-end)
-task.spawn(RefreshPlayersList)
+        if v then
+            if not rootPart then return end
+            
+            -- 1. ЗАПОМИНАЕМ ТОЧКУ, ГДЕ ОН СТОИТ
+            lockedCFrame = rootPart.CFrame
 
-RunService.RenderStepped:Connect(function()
-    local plr = Settings.SelectedPlayer
-    if not plr then
-        InfoLabel.Text = "Игрок не выбран"
-        return
-    end
-    local char = plr.Character
-    local hum = char and char:FindFirstChildOfClass("Humanoid")
-    local hrp = char and char:FindFirstChild("HumanoidRootPart")
-    local hp = hum and math.floor(hum.Health) or 0
-    local maxHp = hum and math.floor(hum.MaxHealth) or 100
-    local dist = 0
-    local lhrp = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
-    if hrp and lhrp then dist = math.floor((hrp.Position - lhrp.Position).Magnitude) end
-    local teamName = plr.Team and plr.Team.Name or "Нет"
-    local isFriend = Settings.Friends[plr.UserId] and "Да" or "Нет"
-    InfoLabel.Text = string.format(
-        "Имя: %s\nНик: @%s\nUserID: %d\nHP: %d / %d\nДистанция: %d studs\nКоманда: %s\nДруг: %s",
-        plr.DisplayName, plr.Name, plr.UserId, hp, maxHp, dist, teamName, isFriend
-    )
-end)
+            oldCameraType = camera.CameraType
+            oldSubject = camera.CameraSubject
+            oldComputerMode = lp.DevComputerMovementMode
+            oldTouchMode = lp.DevTouchMovementMode
 
-SpectateBtn.MouseButton1Click:Connect(function()
-    local plr = Settings.SelectedPlayer
-    if not plr then return end
-    if Settings.Spectating == plr then
-        Settings.Spectating = nil
-        SpectateBtn.Text = "  👁 Следить за игроком"
-        SpectateBtn.BackgroundColor3 = Color3.fromRGB(0, 130, 200)
-    else
-        Settings.Spectating = plr
-        SpectateBtn.Text = "  👁 Прекратить слежку"
-        SpectateBtn.BackgroundColor3 = Color3.fromRGB(200, 60, 60)
-    end
-end)
+            -- Полный отруб ввода
+            lp.DevComputerMovementMode = Enum.DevComputerMovementMode.Scriptable
+            lp.DevTouchMovementMode = Enum.DevTouchMovementMode.Scriptable
 
-TPToBtn.MouseButton1Click:Connect(function()
-    local plr = Settings.SelectedPlayer
-    if not plr or not plr.Character then return end
-    local hrp = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
-    local tHrp = plr.Character:FindFirstChild("HumanoidRootPart")
-    if hrp and tHrp then hrp.CFrame = tHrp.CFrame * CFrame.new(0, 0, -3) end
-end)
+            if humanoid then
+                oldWalkSpeed = humanoid.WalkSpeed
+                oldJumpPower = humanoid.JumpPower
+                oldAutoRotate = humanoid.AutoRotate
 
-UnselectBtn.MouseButton1Click:Connect(function()
-    Settings.SelectedPlayer = nil
-    Settings.Spectating = nil
-    SpectateBtn.Text = "  👁 Следить за игроком"
-    SpectateBtn.BackgroundColor3 = Color3.fromRGB(0, 130, 200)
-    RefreshPlayersList()
-end)
-
-RunService.RenderStepped:Connect(function()
-    if Settings.Spectating then
-        local tChar = Settings.Spectating.Character
-        if tChar then
-            local hum = tChar:FindFirstChildOfClass("Humanoid")
-            if hum and hum.Health > 0 then
-                Camera.CameraSubject = hum
-                Camera.CameraType = Enum.CameraType.Custom
+                humanoid.WalkSpeed = 0
+                humanoid.JumpPower = 0
+                humanoid.AutoRotate = false
+                humanoid.PlatformStand = true
             end
-        end
-    end
-end)
 
---------------------------------------------------------------------------------
--- FOV КРУГ
---------------------------------------------------------------------------------
-local FOVCircle = Drawing.new("Circle")
-FOVCircle.Position = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
-FOVCircle.Radius = Settings.FOVRadius
-FOVCircle.Color = Color3.fromRGB(255, 40, 60)
-FOVCircle.Thickness = 1.5
-FOVCircle.Filled = false
-FOVCircle.Visible = Settings.Aimbot and Settings.UIVisible
+            -- 2. ЖЕСТКИЙ ЦИКЛ ПРИНУДИТЕЛЬНОГО ТЕЛЕПОРТА (Каждый кадр)
+            if freecamLoop then freecamLoop:Disconnect() end
+            freecamLoop = RunService.RenderStepped:Connect(function()
+                pcall(function()
+                    local currentChar = lp.Character
+                    if currentChar and lockedCFrame then
+                        local hrp = currentChar:FindFirstChild("HumanoidRootPart")
+                        if hrp then
+                            -- Намертво пришиваем персонажа к одной точке в пространстве
+                            hrp.CFrame = lockedCFrame
+                            hrp.AssemblyLinearVelocity = Vector3.zero
+                            hrp.AssemblyAngularVelocity = Vector3.zero
+                        end
+                        
+                        -- Отключаем коллизию (чтобы его никто не мог толкнуть)
+                        for _, part in ipairs(currentChar:GetDescendants()) do
+                            if part:IsA("BasePart") then
+                                part.Anchored = true
+                                part.CanCollide = false
+                            end
+                        end
 
-RunService.RenderStepped:Connect(function()
-    FOVCircle.Position = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
-    FOVCircle.Radius = Settings.FOVRadius
-    FOVCircle.Visible = Settings.Aimbot and Settings.UIVisible
-end)
+                        local hum = currentChar:FindFirstChildOfClass("Humanoid")
+                        if hum then
+                            hum.WalkSpeed = 0
+                            hum.JumpPower = 0
+                            hum:Move(Vector3.zero, true)
+                        end
+                    end
+                end)
+            end)
 
---------------------------------------------------------------------------------
--- ESP HIGHLIGHT + BILLBOARD ТЭГИ
---------------------------------------------------------------------------------
-local function AddHighlight(player)
-    local function onChar(char)
-        if not char then return end
-        local hl = char:FindFirstChild("BloodZone_ESP") or Instance.new("Highlight")
-        hl.Name = "BloodZone_ESP"
-        hl.Adornee = char
-        hl.FillTransparency = 0.4
-        hl.OutlineColor = Color3.fromRGB(255, 255, 255)
-        hl.OutlineTransparency = 0
-        hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
-        hl.Parent = char
+            camera.CameraType = Enum.CameraType.Scriptable
+            if startFreecam then pcall(startFreecam) end
 
-        task.spawn(function()
-            local head = char:WaitForChild("Head", 5)
-            if head then
-                local bgui = head:FindFirstChild("BloodZone_Tag") or Instance.new("BillboardGui")
-                bgui.Name = "BloodZone_Tag"
-                bgui.Adornee = head
-                bgui.Size = UDim2.new(0, 200, 0, 30)
-                bgui.StudsOffset = Vector3.new(0, 2.5, 0)
-                bgui.AlwaysOnTop = true
-                bgui.Parent = head
-                local label = bgui:FindFirstChild("TagLabel") or Instance.new("TextLabel")
-                label.Name = "TagLabel"
-                label.Size = UDim2.new(1, 0, 1, 0)
-                label.BackgroundTransparency = 1
-                label.TextColor3 = Color3.fromRGB(255, 255, 255)
-                label.TextStrokeTransparency = 0
-                label.TextStrokeColor3 = Color3.fromRGB(0, 0, 0)
-                label.Font = Enum.Font.GothamBold
-                label.TextSize = 12
-                label.Parent = bgui
+        else
+            -- 3. РАЗБЛОКИРОВКА
+            if freecamLoop then
+                freecamLoop:Disconnect()
+                freecamLoop = nil
             end
-        end)
-    end
-    if player.Character then onChar(player.Character) end
-    player.CharacterAdded:Connect(onChar)
-end
-for _, p in ipairs(Players:GetPlayers()) do
-    if p ~= LocalPlayer then AddHighlight(p) end
-end
-Players.PlayerAdded:Connect(function(p)
-    if p ~= LocalPlayer then AddHighlight(p) end
-end)
+            lockedCFrame = nil
 
-RunService.RenderStepped:Connect(function()
-    for _, p in ipairs(Players:GetPlayers()) do
-        if p ~= LocalPlayer and p.Character then
-            local char = p.Character
-            local hl = char:FindFirstChild("BloodZone_ESP")
-            local head = char:FindFirstChild("Head")
-            local bgui = head and head:FindFirstChild("BloodZone_Tag")
-            local label = bgui and bgui:FindFirstChild("TagLabel")
-            local hum = char:FindFirstChild("Humanoid")
-            local isFriend = Settings.Friends[p.UserId]
-            local mainColor = isFriend and Color3.fromRGB(0, 255, 120) or Color3.fromRGB(255, 30, 60)
+            lp.DevComputerMovementMode = oldComputerMode or Enum.DevComputerMovementMode.UserChoice
+            lp.DevTouchMovementMode = oldTouchMode or Enum.DevTouchMovementMode.UserChoice
 
-            if hl then
-                hl.Enabled = Settings.ESP
-                hl.FillColor = mainColor
-            end
-            if bgui and label then
-                bgui.Enabled = Settings.ESP
-                if hum and head and LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Head") then
-                    local dist = math.floor((head.Position - LocalPlayer.Character.Head.Position).Magnitude)
-                    label.Text = string.format("%s [%d HP] (%dm)", p.DisplayName, math.floor(math.max(0, hum.Health)), dist)
-                    label.TextColor3 = mainColor
-                end
-            end
-        end
-    end
-end)
-
---------------------------------------------------------------------------------
--- AIMBOT LOGIC
---------------------------------------------------------------------------------
-local function GetTargetPart(char)
-    if not char then return nil end
-    if Settings.TargetPart == "Head" then
-        return char:FindFirstChild("Head")
-    else
-        return char:FindFirstChild("HumanoidRootPart") or char:FindFirstChild("UpperTorso") or char:FindFirstChild("Torso")
-    end
-end
-
-local function IsBulletPathClear(targetPart)
-    if not targetPart then return false end
-    local origin = Camera.CFrame.Position
-    local ignoreList = {LocalPlayer.Character, targetPart.Parent}
-    for _ = 1, 5 do
-        local p = RaycastParams.new()
-        p.FilterType = Enum.RaycastFilterType.Exclude
-        p.FilterDescendantsInstances = ignoreList
-        local res = Workspace:Raycast(origin, targetPart.Position - origin, p)
-        if not res then return true end
-        local hp = res.Instance
-        if hp.Transparency > 0.25 or hp.Material == Enum.Material.Glass
-           or hp.Name:lower():find("glass") or hp.Name:lower():find("window") then
-            table.insert(ignoreList, hp)
-        else return false end
-    end
-    return false
-end
-
-function GetClosestTargetInFOV()
-    local closest, shortestDist = nil, Settings.FOVRadius
-    local center = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
-    for _, player in ipairs(Players:GetPlayers()) do
-        if player ~= LocalPlayer and not Settings.Friends[player.UserId]
-           and player.Character and player.Character:FindFirstChild("Humanoid")
-           and player.Character.Humanoid.Health > 0 then
-            local targetPart = GetTargetPart(player.Character)
-            if targetPart then
-                local sp, on = Camera:WorldToViewportPoint(targetPart.Position)
-                if on then
-                    local d = (Vector2.new(sp.X, sp.Y) - center).Magnitude
-                    if d <= shortestDist and IsBulletPathClear(targetPart) then
-                        shortestDist = d; closest = player
+            local currentChar = lp.Character
+            if currentChar then
+                for _, part in ipairs(currentChar:GetDescendants()) do
+                    if part:IsA("BasePart") then
+                        part.Anchored = false
+                        part.CanCollide = true -- Возвращаем осязаемость
                     end
                 end
-            end
-        end
-    end
-    return closest
-end
 
-local function FireWeapon()
-    pcall(function()
-        if mouse1press and mouse1release then
-            mouse1press()
-            task.delay(0.05, function() pcall(mouse1release) end)
-        elseif keypress and keyrelease then
-            keypress(0x01)
-            task.delay(0.05, function() keyrelease(0x01) end)
-        end
-    end)
-end
-
---------------------------------------------------------------------------------
--- INPUT
---------------------------------------------------------------------------------
-local InputConn = UserInputService.InputBegan:Connect(function(input, gpe)
-    if Settings.ClickTP and not gpe then
-        if input.UserInputType == Enum.UserInputType.MouseButton1
-        or input.UserInputType == Enum.UserInputType.Touch then
-            local pos = input.Position
-            local ray = Camera:ViewportPointToRay(pos.X, pos.Y)
-            local params = RaycastParams.new()
-            params.FilterType = Enum.RaycastFilterType.Exclude
-            params.FilterDescendantsInstances = {LocalPlayer.Character}
-            local res = Workspace:Raycast(ray.Origin, ray.Direction * 5000, params)
-            if res then
-                local hrp = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
-                if hrp then hrp.CFrame = CFrame.new(res.Position + Vector3.new(0, 3, 0)) end
-            end
-        end
-    end
-
-    if gpe then return end
-
-    if input.UserInputType == Enum.UserInputType.MouseButton2 then
-        Settings.IsRMBDown = true
-        Settings.LockedTarget = GetClosestTargetInFOV()
-    elseif input.KeyCode == Enum.KeyCode.Zero or input.KeyCode == Enum.KeyCode.KeypadZero then
-        Settings.AutoLock = not Settings.AutoLock
-        if SetAutoLockState then SetAutoLockState(Settings.AutoLock) end
-        LockBtn.BackgroundColor3 = Settings.AutoLock and Color3.fromRGB(0, 180, 80) or Color3.fromRGB(60, 60, 70)
-        if not Settings.AutoLock then Settings.LockedTarget = nil end
-        RequestSave()
-    elseif input.KeyCode == Enum.KeyCode.Insert then
-        Settings.UIVisible = not Settings.UIVisible
-        MainFrame.Visible = Settings.UIVisible
-    elseif input.KeyCode == Enum.KeyCode.Delete then
-        SaveConfig()
-        StopFly(); StopNoclip(); StopFreeCam()
-        FOVCircle:Remove()
-        ScreenGui:Destroy()
-        for _, p in ipairs(Players:GetPlayers()) do
-            if p.Character then
-                if p.Character:FindFirstChild("BloodZone_ESP") then
-                    p.Character.BloodZone_ESP:Destroy()
-                end
-                local head = p.Character:FindFirstChild("Head")
-                if head and head:FindFirstChild("BloodZone_Tag") then
-                    head.BloodZone_Tag:Destroy()
+                local hum = currentChar:FindFirstChildOfClass("Humanoid")
+                if hum then
+                    hum.WalkSpeed = oldWalkSpeed or 16
+                    hum.JumpPower = oldJumpPower or 50
+                    hum.AutoRotate = oldAutoRotate ~= false
+                    hum.PlatformStand = false
                 end
             end
+
+            camera.CameraType = oldCameraType or Enum.CameraType.Custom
+            camera.CameraSubject = humanoid or oldSubject
+
+            if stopFreecam then pcall(stopFreecam) end
         end
     end
-end)
+})
 
-UserInputService.InputEnded:Connect(function(input)
-    if input.UserInputType == Enum.UserInputType.MouseButton2 then
-        Settings.IsRMBDown = false
-        if not Settings.AutoLock then Settings.LockedTarget = nil end
-    end
-end)
+TabExtras:CreateSlider({
+    Name = "📷 Скорость Freecam",
+    Range = {5, 200},
+    Increment = 5,
+    CurrentValue = 30,
+    Callback = function(v) freecamSpeed = v end
+})
+-- ── Crosshair ───────────────────────────────────────────────────
+TabExtras:CreateSection("➕ Прицел")
 
-ToggleBtn.MouseButton1Click:Connect(function()
-    Settings.UIVisible = not Settings.UIVisible
-    MainFrame.Visible = Settings.UIVisible
-end)
-CloseBtn.MouseButton1Click:Connect(function()
-    Settings.UIVisible = false
-    MainFrame.Visible = false
-end)
+TabExtras:CreateToggle({
+   Name = "➕ Прицел на экране (Crosshair)",
+   CurrentValue = false,
+   Callback = function(v)
+      crosshairEnabled = v
+      if not v then hideCrosshair() end
+   end
+})
 
-LockBtn.MouseButton1Click:Connect(function()
-    Settings.AutoLock = not Settings.AutoLock
-    if SetAutoLockState then SetAutoLockState(Settings.AutoLock) end
-    if Settings.AutoLock then
-        Settings.LockedTarget = GetClosestTargetInFOV()
-        LockBtn.BackgroundColor3 = Color3.fromRGB(0, 180, 80)
-    else
-        Settings.LockedTarget = nil
-        LockBtn.BackgroundColor3 = Color3.fromRGB(60, 60, 70)
-    end
-    RequestSave()
-end)
+TabExtras:CreateSlider({
+   Name = "➕ Размер прицела",
+   Range = {4, 40}, Increment = 1, CurrentValue = 10,
+   Callback = function(v) crosshairSize = v end
+})
 
---------------------------------------------------------------------------------
--- AIMBOT LOOP
---------------------------------------------------------------------------------
-RunService.RenderStepped:Connect(function()
-    local isAiming = Settings.IsRMBDown or Settings.AutoLock
-    if not Settings.Aimbot or not isAiming then return end
-    local target = Settings.LockedTarget
-    if target and not Settings.Friends[target.UserId]
-       and target.Character and target.Character:FindFirstChild("Humanoid")
-       and target.Character.Humanoid.Health > 0 then
-        local targetPart = GetTargetPart(target.Character)
-        if targetPart and IsBulletPathClear(targetPart) then
-            Camera.CFrame = CFrame.lookAt(Camera.CFrame.Position, targetPart.Position)
-            if Settings.AutoShoot then
-                FireWeapon()
+TabExtras:CreateSlider({
+   Name = "➕ Зазор прицела",
+   Range = {0, 20}, Increment = 1, CurrentValue = 4,
+   Callback = function(v) crosshairGap = v end
+})
+
+TabExtras:CreateColorPicker({
+   Name = "➕ Цвет прицела",
+   Color = Color3.fromRGB(255, 255, 255),
+   Callback = function(c) crosshairColor = c end
+})
+
+-- ── Auto Sprint ─────────────────────────────────────────────────
+TabExtras:CreateSection("🏃 Авто-спринт")
+
+TabExtras:CreateToggle({
+   Name = "🏃 Авто-спринт",
+   CurrentValue = false,
+   Callback = function(v)
+      autoSprintEnabled = v
+      notify("🏃", v and "Авто-спринт ВКЛ" or "ВЫКЛ", 2)
+   end
+})
+
+-- ── Hit Sound ───────────────────────────────────────────────────
+TabExtras:CreateSection("🔊 Hit Sound")
+
+TabExtras:CreateToggle({
+   Name = "🔊 Звук при попадании",
+   CurrentValue = false,
+   Callback = function(v)
+      hitSoundEnabled = v
+      notify("🔊", v and "Hit Sound ВКЛ" or "ВЫКЛ", 2)
+   end
+})
+
+TabExtras:CreateSlider({
+   Name = "🔊 Громкость",
+   Range = {0, 100}, Increment = 5, CurrentValue = 60,
+   Callback = function(v) hitSoundInst.Volume = v / 100 end
+})
+
+-- ── Rainbow ─────────────────────────────────────────────────────
+TabExtras:CreateSection("🌈 Rainbow")
+
+TabExtras:CreateToggle({
+   Name = "🌈 Радужный персонаж",
+   CurrentValue = false,
+   Callback = function(v)
+      rainbowEnabled = v
+      if not v then
+         -- Возвращаем стандартный белый цвет
+         local char = getChar()
+         if char then
+            for _, p in pairs(char:GetDescendants()) do
+               if p:IsA("BasePart") and p.Name ~= "HumanoidRootPart" then
+                  p.Color = Color3.fromRGB(163, 162, 165)
+               end
             end
-        else
-            Settings.LockedTarget = GetClosestTargetInFOV()
-        end
-    else
-        Settings.LockedTarget = GetClosestTargetInFOV()
-    end
-end)
+         end
+      end
+      notify("🌈", v and "Rainbow ВКЛ" or "ВЫКЛ", 2)
+   end
+})
 
-print("[Misty_Dany Hub V10] Загружено! Fly - по джойстику, настройки сохраняются.")
+-- ╔══════════════════════╗
+-- ║  SPECTATE + INSPECT  ║
+-- ╚══════════════════════╝
+local TabInspect = Window:CreateTab("🔍 Игроки", 4483362458)
+
+TabInspect:CreateSection("📡 Spectate")
+
+local spectateNames = otherNames and (type(otherNames) == "function" and otherNames()) or {"(нет игроков)"}
+local spectateSelected = spectateNames[1] ~= "(нет игроков)" and spectateNames[1] or nil
+
+local spectateDropdown = TabInspect:CreateDropdown({
+   Name = "📡 Выбрать игрока",
+   Options = spectateNames,
+   CurrentOption = spectateNames[1],
+   Callback = function(opt)
+      local name = type(opt) == "table" and opt[1] or opt
+      if name ~= "(нет игроков)" then spectateSelected = name end
+   end
+})
+
+TabInspect:CreateButton({
+   Name = "📡 Начать наблюдение",
+   Callback = function()
+      if not spectateSelected then notify("📡", "Выберите игрока!", 3); return end
+      local target = findPlayerByName and findPlayerByName(spectateSelected)
+         or (function()
+            for _, p in ipairs(Players:GetPlayers()) do
+               if p.Name == spectateSelected then return p end
+            end
+         end)()
+      if not target then notify("📡", "Игрок не найден", 3); return end
+      startSpectate(target)
+   end
+})
+
+TabInspect:CreateButton({
+   Name = "📡 Остановить наблюдение",
+   Callback = function() stopSpectate() end
+})
+
+TabInspect:CreateButton({
+   Name = "🔄 Обновить список",
+   Callback = function()
+      local names = {}
+      for _, p in ipairs(Players:GetPlayers()) do
+         if p ~= lp then table.insert(names, p.Name) end
+      end
+      if #names == 0 then names = {"(нет игроков)"} end
+      spectateDropdown:Refresh(names, true)
+      if names[1] ~= "(нет игроков)" then spectateSelected = names[1] end
+      notify("🔄", "Список обновлён", 2)
+   end
+})
+
+TabInspect:CreateSection("🔍 Инспектор персонажа")
+
+TabInspect:CreateButton({
+   Name = "🔍 Инфо о выбранном игроке",
+   Callback = function()
+      if not spectateSelected then notify("🔍", "Выберите игрока!", 3); return end
+      local target = (function()
+         for _, p in ipairs(Players:GetPlayers()) do
+            if p.Name == spectateSelected then return p end
+         end
+      end)()
+      if not target then notify("🔍", "Игрок не найден", 3); return end
+
+      local char = target.Character
+      local hum  = char and char:FindFirstChildOfClass("Humanoid")
+      local hrp  = char and char:FindFirstChild("HumanoidRootPart")
+      local myHRP = getHRP()
+
+      local dist = (hrp and myHRP)
+         and math.floor((hrp.Position - myHRP.Position).Magnitude) or -1
+      local hp   = hum and math.floor(hum.Health) or 0
+      local maxhp= hum and math.floor(hum.MaxHealth) or 0
+      local spd  = hum and math.floor(hum.WalkSpeed) or 0
+      local team = target.Team and target.Team.Name or "Нет команды"
+      local acct = math.floor((tick() - target.AccountAge * 86400) / 86400)
+
+      local info = string.format(
+         "Ник: %s\nDisplayName: %s\nUserId: %d\nTeam: %s\nHP: %d/%d\nСкорость: %d\nДистанция: %d м\nАккаунт: %d дн.",
+         target.Name, target.DisplayName, target.UserId,
+         team, hp, maxhp, spd, dist, target.AccountAge
+      )
+      notify("🔍 " .. target.Name, info, 10)
+      setclipboard(info)
+      print("=== 🔍 " .. target.Name .. " ===\n" .. info)
+   end
+})
+
+TabInspect:CreateButton({
+   Name = "📋 Скопировать UserId",
+   Callback = function()
+      if not spectateSelected then notify("📋", "Выберите игрока!", 3); return end
+      for _, p in ipairs(Players:GetPlayers()) do
+         if p.Name == spectateSelected then
+            setclipboard(tostring(p.UserId))
+            notify("📋", "UserId скопирован: " .. p.UserId, 3)
+            return
+         end
+      end
+   end
+})
+
+-- ╔══════════════════════╗
+-- ║  СКРИПТЫ V2          ║
+-- ╚══════════════════════╝
+local TabScriptsV2 = Window:CreateTab("📜 Скрипты+", 4483362458)
+
+TabScriptsV2:CreateSection("➕ Добавить скрипт")
+
+-- Поля ввода нового скрипта
+local newScriptName   = ""
+local newScriptSource = ""
+local newScriptType   = "loadstring"   -- "loadstring" или "code"
+
+TabScriptsV2:CreateInput({
+   Name        = "📝 Название скрипта",
+   PlaceholderText = "Например: My Script",
+   RemoveTextAfterFocusLost = false,
+   Callback    = function(v) newScriptName = v end
+})
+
+TabScriptsV2:CreateInput({
+   Name        = "🔗 URL или код",
+   PlaceholderText = "https://... или Lua код",
+   RemoveTextAfterFocusLost = false,
+   Callback    = function(v) newScriptSource = v end
+})
+
+TabScriptsV2:CreateDropdown({
+   Name          = "⚙️ Тип скрипта",
+   Options       = {"loadstring (URL)", "code (Lua)"},
+   CurrentOption = "loadstring (URL)",
+   Callback      = function(opt)
+      local o = type(opt) == "table" and opt[1] or opt
+      newScriptType = o:find("code") and "code" or "loadstring"
+   end
+})
+
+TabScriptsV2:CreateButton({
+   Name = "💾 Сохранить и запустить",
+   Callback = function()
+      if newScriptName == "" or newScriptSource == "" then
+         notify("❌", "Заполни название и источник!", 3); return
+      end
+      local entry = {
+         Name   = newScriptName,
+         Source = newScriptSource,
+         Type   = newScriptType,
+         Time   = os.date("%d.%m %H:%M"),
+      }
+      table.insert(savedScripts, 1, entry)
+      if #savedScripts > 50 then table.remove(savedScripts) end
+      saveScriptsToDisk()
+      runScript(entry)
+   end
+})
+
+TabScriptsV2:CreateButton({
+   Name = "▶️ Запустить (без сохранения)",
+   Callback = function()
+      if newScriptSource == "" then
+         notify("❌", "Заполни источник!", 3); return
+      end
+      runScript({
+         Name   = newScriptName ~= "" and newScriptName or "Быстрый скрипт",
+         Source = newScriptSource,
+         Type   = newScriptType,
+      })
+   end
+})
+
+TabScriptsV2:CreateSection("📂 Сохранённые скрипты")
+
+TabScriptsV2:CreateButton({
+   Name = "📂 Показать список сохранённых",
+   Callback = function()
+      if #savedScripts == 0 then
+         notify("📂", "Нет сохранённых скриптов", 3); return
+      end
+      local lines = {}
+      for i, s in ipairs(savedScripts) do
+         table.insert(lines, i .. ". [" .. s.Type .. "] " .. s.Name .. "  (" .. (s.Time or "") .. ")")
+      end
+      local out = table.concat(lines, "\n")
+      print("=== 📂 Сохранённые скрипты ===\n" .. out)
+      setclipboard(out)
+      notify("📂", #savedScripts .. " скриптов. Список в консоли.", 4)
+   end
+})
+
+TabScriptsV2:CreateButton({
+   Name = "▶️ Запустить последний сохранённый",
+   Callback = function()
+      if #savedScripts == 0 then
+         notify("❌", "Нет сохранённых скриптов", 3); return
+      end
+      runScript(savedScripts[1])
+   end
+})
+
+TabScriptsV2:CreateButton({
+   Name = "🗑️ Очистить все сохранённые",
+   Callback = function()
+      savedScripts = {}
+      saveScriptsToDisk()
+      notify("🗑️", "Список очищен", 2)
+   end
+})
+
+TabScriptsV2:CreateSection("📝 Лог скриптов")
+
+TabScriptsV2:CreateButton({
+   Name = "📝 Показать лог запусков",
+   Callback = function()
+      if #scriptLog == 0 then
+         notify("📝", "Лог пуст", 2); return
+      end
+      local lines = {}
+      for _, e in ipairs(scriptLog) do
+         local status = e.OK and "✅" or "❌"
+         local err    = (not e.OK and e.Err ~= "") and (" — " .. e.Err) or ""
+         table.insert(lines, status .. " [" .. e.Time .. "] " .. e.Name .. err)
+      end
+      local out = table.concat(lines, "\n")
+      print("=== 📝 Лог скриптов ===\n" .. out)
+      setclipboard(out)
+      notify("📝", "Лог в консоли (" .. #scriptLog .. " записей)", 3)
+   end
+})
+
+TabScriptsV2:CreateButton({
+   Name = "🗑️ Очистить лог",
+   Callback = function()
+      scriptLog = {}
+      notify("🗑️", "Лог очищен", 2)
+   end
+})
+
+-- ╔══════════════════════╗
+-- ║  KEYBIND MANAGER     ║
+-- ╚══════════════════════╝
+local TabKeybinds = Window:CreateTab("⌨️ Кейбинды", 4483362458)
+
+TabKeybinds:CreateSection("⌨️ Активные кейбинды")
+
+-- Информационная кнопка — показывает все назначенные кейбинды
+TabKeybinds:CreateButton({
+   Name = "📋 Показать все кейбинды",
+   Callback = function()
+      local info = table.concat({
+         "G  — Бог режим",
+         "F  — Полёт",
+         "H  — Анти-АФК",
+         "C  — Crosshair (быстрый тоггл)",
+         "V  — Freecam (быстрый тоггл)",
+         "T  — Click Teleport тоггл",
+         "R  — Rainbow тоггл",
+      }, "\n")
+      print("=== ⌨️ Кейбинды ===\n" .. info)
+      setclipboard(info)
+      notify("⌨️ Кейбинды", "Список в консоли и буфере", 3)
+   end
+})
+
+TabKeybinds:CreateSection("⌨️ Быстрые кейбинды")
+
+-- Crosshair быстрый кейбинд
+TabKeybinds:CreateKeybind({
+   Name = "➕ Прицел (тоггл)",
+   CurrentKeybind = "C",
+   HoldToInteract = false,
+   Callback = function()
+      crosshairEnabled = not crosshairEnabled
+      if not crosshairEnabled then hideCrosshair() end
+      notify("➕", crosshairEnabled and "Прицел ВКЛ" or "ВЫКЛ", 1)
+   end
+})
+
+-- Freecam быстрый кейбинд
+TabKeybinds:CreateKeybind({
+   Name = "📷 Freecam (тоггл)",
+   CurrentKeybind = "V",
+   HoldToInteract = false,
+   Callback = function()
+      freecamEnabled = not freecamEnabled
+      if freecamEnabled then
+         startFreecam()
+         notify("📷 Freecam", "ВКЛ — WASD+E/Q для движения", 3)
+      else
+         stopFreecam()
+         notify("📷 Freecam", "ВЫКЛ", 1)
+      end
+   end
+})
+
+-- Click TP быстрый кейбинд
+TabKeybinds:CreateKeybind({
+   Name = "🎯 Click TP (тоггл)",
+   CurrentKeybind = "T",
+   HoldToInteract = false,
+   Callback = function()
+      clickTpEnabled = not clickTpEnabled
+      if clickTpEnabled then startClickTp() end
+      notify("🎯", clickTpEnabled and "Click TP ВКЛ" or "ВЫКЛ", 1)
+   end
+})
+
+-- Rainbow быстрый кейбинд
+TabKeybinds:CreateKeybind({
+   Name = "🌈 Rainbow (тоггл)",
+   CurrentKeybind = "R",
+   HoldToInteract = false,
+   Callback = function()
+      rainbowEnabled = not rainbowEnabled
+      notify("🌈", rainbowEnabled and "Rainbow ВКЛ" or "ВЫКЛ", 1)
+   end
+})
+
+-- ════════════════════════════════════════════════════════════════
+--  CLEANUP: добавляем новые системы в Unload
+-- ════════════════════════════════════════════════════════════════
+-- (патчим кнопку Unload через _G флаги)
+_G.MistyCleanupV2 = function()
+   -- Click TP
+   clickTpEnabled = false
+   if clickTpConn then clickTpConn:Disconnect(); clickTpConn = nil end
+   -- Freecam
+   freecamEnabled = false
+   stopFreecam()
+   -- Crosshair
+   crosshairEnabled = false
+   hideCrosshair()
+   if crosshairConn then crosshairConn:Disconnect() end
+   for _, l in ipairs(crosshairLines) do pcall(function() l:Remove() end) end
+   -- Rainbow
+   rainbowEnabled = false
+   if rainbowConn then rainbowConn:Disconnect() end
+   -- Auto sprint
+   autoSprintEnabled = false
+   if autoSprintConn then autoSprintConn:Disconnect() end
+   -- Spectate
+   stopSpectate()
+   -- Hit sound
+   hitSoundEnabled = false
+   pcall(function() hitSoundInst:Destroy() end)
+end
+
+-- ════════════════════════════════════════════════════════════════
+-- ██  СИСТЕМЫ v3.3  ███████████████████████████████████████████
+--
+--  1. Connection Manager   — централизованное управление connect()
+--  2. Settings Registry    — auto-save всех настроек
+--  3. Theme System         — смена тем оформления
+--  4. Script Loader v2     — загрузка/сохранение скриптов
+--  5. Search Bar           — поиск по командам
+--  6. Plugin System        — динамические расширения
+--  7. Config Manager       — несколько конфигов
+--  8. Auto-save Config     — автосохранение каждые 30 сек
+--  9. Command Palette      — быстрые команды через ввод
+-- 10. Draggable Watermark  — перетаскиваемый оверлей
+-- ════════════════════════════════════════════════════════════════
+
+-- ────────────────────────────────────────────────────────────────
+--  1. CONNECTION MANAGER
+--  Все соединения хранятся здесь — один вызов CleanAll() при Unload
+-- ────────────────────────────────────────────────────────────────
+local ConnectionManager = {}
+ConnectionManager._conns = {}   -- { id = RBXScriptConnection }
+ConnectionManager._id    = 0
+
+function ConnectionManager:Add(conn, label)
+   self._id = self._id + 1
+   local id = label or ("conn_" .. self._id)
+   self._conns[id] = conn
+   return id
+end
+
+function ConnectionManager:Remove(id)
+   local c = self._conns[id]
+   if c then
+      pcall(function() c:Disconnect() end)
+      self._conns[id] = nil
+   end
+end
+
+function ConnectionManager:CleanAll()
+   for id, c in pairs(self._conns) do
+      pcall(function() c:Disconnect() end)
+   end
+   self._conns = {}
+end
+
+function ConnectionManager:Count()
+   local n = 0
+   for _ in pairs(self._conns) do n = n + 1 end
+   return n
+end
+
+-- ────────────────────────────────────────────────────────────────
+--  2. SETTINGS REGISTRY
+--  Сохраняет и загружает все настройки хаба в JSON на диске
+-- ────────────────────────────────────────────────────────────────
+local SettingsRegistry = {}
+SettingsRegistry._data = {}
+SettingsRegistry._file = "MistyDany_Settings.json"
+
+function SettingsRegistry:Set(key, value)
+   self._data[key] = value
+end
+
+function SettingsRegistry:Get(key, default)
+   local v = self._data[key]
+   return v ~= nil and v or default
+end
+
+function SettingsRegistry:SaveAll()
+   pcall(function()
+      writefile(self._file, HttpService:JSONEncode(self._data))
+   end)
+end
+
+function SettingsRegistry:LoadAll()
+   local ok, data = pcall(function()
+      if isfile(self._file) then
+         return HttpService:JSONDecode(readfile(self._file))
+      end
+      return {}
+   end)
+   if ok and type(data) == "table" then
+      self._data = data
+   end
+end
+
+-- Загружаем при старте
+SettingsRegistry:LoadAll()
+
+-- ────────────────────────────────────────────────────────────────
+--  3. THEME SYSTEM
+--  Набор тем — меняет цвет watermark бара и ESP
+-- ────────────────────────────────────────────────────────────────
+local ThemeSystem = {}
+ThemeSystem.current = "Purple"
+ThemeSystem.themes  = {
+   Purple  = { accent = Color3.fromRGB(120, 80,  255), esp = Color3.fromRGB(160, 100, 255) },
+   Blue    = { accent = Color3.fromRGB(50,  120, 255), esp = Color3.fromRGB(80,  160, 255) },
+   Red     = { accent = Color3.fromRGB(255, 50,  80),  esp = Color3.fromRGB(255, 100, 120) },
+   Green   = { accent = Color3.fromRGB(50,  220, 100), esp = Color3.fromRGB(80,  255, 140) },
+   Gold    = { accent = Color3.fromRGB(255, 195, 0),   esp = Color3.fromRGB(255, 210, 50)  },
+   Cyan    = { accent = Color3.fromRGB(0,   210, 255), esp = Color3.fromRGB(50,  230, 255) },
+   Rainbow = { accent = nil,                            esp = nil                           },
+}
+
+function ThemeSystem:Apply(name)
+   local theme = self.themes[name]
+   if not theme then return end
+   self.current = name
+   SettingsRegistry:Set("theme", name)
+
+   if name == "Rainbow" then
+      -- Watermark bar уже делает радугу сам по себе
+      return
+   end
+
+   -- Перекрашиваем watermark бар
+   pcall(function() Watermark.bar.Color = theme.accent end)
+
+   -- Перекрашиваем ESP
+   for _, obj in pairs(espObjects) do
+      pcall(function()
+         obj.hl.OutlineColor = theme.esp
+         obj.nameLbl.TextColor3 = theme.esp
+      end)
+   end
+
+   notify("🎨 Тема", "Применена: " .. name, 2)
+end
+
+-- ────────────────────────────────────────────────────────────────
+--  4. SCRIPT LOADER v2
+--  Встроенная библиотека скриптов + пользовательские
+-- ────────────────────────────────────────────────────────────────
+local ScriptLoader = {}
+ScriptLoader._file     = "MistyDany_ScriptLib.json"
+ScriptLoader._userFile = "MistyDany_UserScripts.json"
+
+-- Встроенная библиотека (всегда доступна)
+ScriptLoader.library = {
+   {
+      Name     = "Infinite Yield",
+      Category = "Admin",
+      Type     = "loadstring",
+      Source   = "https://raw.githubusercontent.com/EdgeIY/infinite-yield/master/source",
+      Desc     = "Полноценный admin panel",
+   },
+   {
+      Name     = "Dex Explorer",
+      Category = "Tools",
+      Type     = "loadstring",
+      Source   = "https://raw.githubusercontent.com/LorekeeperZinnia/Dex/master/Dex3",
+      Desc     = "Браузер иерархии игры",
+   },
+   {
+      Name     = "Remote Spy",
+      Category = "Tools",
+      Type     = "loadstring",
+      Source   = "https://raw.githubusercontent.com/exxtremewa/remote-spy-v2/main/source",
+      Desc     = "Слушает RemoteEvent/Function",
+   },
+}
+
+-- Пользовательские скрипты (сохранённые на диск)
+ScriptLoader.userScripts = {}
+
+function ScriptLoader:LoadUserFromDisk()
+   local ok, data = pcall(function()
+      if isfile(self._userFile) then
+         return HttpService:JSONDecode(readfile(self._userFile))
+      end
+      return {}
+   end)
+   if ok and type(data) == "table" then
+      self.userScripts = data
+   end
+end
+
+function ScriptLoader:SaveUserToDisk()
+   pcall(function()
+      writefile(self._userFile, HttpService:JSONEncode(self.userScripts))
+   end)
+end
+
+function ScriptLoader:AddUserScript(name, source, stype, category, desc)
+   -- Проверяем дубликат
+   for _, s in ipairs(self.userScripts) do
+      if s.Name == name then
+         notify("⚠️", "Скрипт '" .. name .. "' уже сохранён", 3)
+         return false
+      end
+   end
+   table.insert(self.userScripts, {
+      Name     = name,
+      Source   = source,
+      Type     = stype     or "loadstring",
+      Category = category  or "User",
+      Desc     = desc      or "",
+      Added    = os.date("%d.%m.%Y %H:%M"),
+   })
+   self:SaveUserToDisk()
+   return true
+end
+
+function ScriptLoader:RemoveUserScript(name)
+   for i, s in ipairs(self.userScripts) do
+      if s.Name == name then
+         table.remove(self.userScripts, i)
+         self:SaveUserToDisk()
+         notify("🗑️", "Удалено: " .. name, 2)
+         return true
+      end
+   end
+   return false
+end
+
+function ScriptLoader:Run(entry)
+   if not entry or not entry.Source or entry.Source == "" then
+      notify("❌", "Источник пуст", 3); return false
+   end
+   local name = entry.Name or "Script"
+   notify("▶️ Запуск", name, 2)
+   local ok, err = pcall(function()
+      if entry.Type == "code" then
+         loadstring(entry.Source)()
+      else
+         loadstring(game:HttpGet(entry.Source, true))()
+      end
+   end)
+   if ok then
+      notify("✅", name .. " запущен", 2)
+      -- Лог
+      table.insert(scriptLog, 1, {
+         Name = name, Time = os.date("%H:%M:%S"), OK = true, Err = ""
+      })
+   else
+      local e = tostring(err):sub(1, 100)
+      notify("❌ Ошибка", name .. ": " .. e, 6)
+      table.insert(scriptLog, 1, {
+         Name = name, Time = os.date("%H:%M:%S"), OK = false, Err = e
+      })
+   end
+   if #scriptLog > 50 then table.remove(scriptLog) end
+   return ok
+end
+
+function ScriptLoader:GetAllByCategory()
+   local cats = {}
+   local function add(entry)
+      local cat = entry.Category or "Other"
+      if not cats[cat] then cats[cat] = {} end
+      table.insert(cats[cat], entry)
+   end
+   for _, s in ipairs(self.library)     do add(s) end
+   for _, s in ipairs(self.userScripts) do add(s) end
+   return cats
+end
+
+-- Загрузка пользовательских скриптов при старте
+ScriptLoader:LoadUserFromDisk()
+
+-- ────────────────────────────────────────────────────────────────
+--  5. SEARCH / COMMAND PALETTE
+--  Простой матчер по списку всех команд хаба
+-- ────────────────────────────────────────────────────────────────
+local CommandPalette = {}
+CommandPalette.commands = {
+   -- Формат: { name, desc, action }
+   { name = "fly",          desc = "Включить/выключить полёт",         action = function() FlyToggle:Set(not flyEnabled) end },
+   { name = "god",          desc = "Включить/выключить бог режим",     action = function() GodToggle:Set(not _G.GodMode)  end },
+   { name = "noclip",       desc = "Включить/выключить нокилп",        action = function() noclipEnabled = not noclipEnabled end },
+   { name = "rainbow",      desc = "Включить/выключить rainbow",       action = function() rainbowEnabled = not rainbowEnabled end },
+   { name = "crosshair",    desc = "Включить/выключить прицел",        action = function() crosshairEnabled = not crosshairEnabled end },
+   { name = "freecam",      desc = "Включить/выключить freecam",       action = function()
+      freecamEnabled = not freecamEnabled
+      if freecamEnabled then startFreecam() else stopFreecam() end
+   end },
+   { name = "esp",          desc = "Включить/выключить ESP",           action = function() espEnabled = not espEnabled end },
+   { name = "fullbright",   desc = "Включить/выключить fullbright",    action = function()
+      fullbrightActive = not fullbrightActive
+      if fullbrightActive then
+         Lighting.Ambient = Color3.new(1,1,1); Lighting.Brightness = 2
+         Lighting.FogEnd  = 1e6; Lighting.GlobalShadows = false
+      else
+         Lighting.Ambient = origAmbient; Lighting.Brightness = origBrightness
+         Lighting.FogEnd  = origFogEnd;  Lighting.GlobalShadows = true
+      end
+   end },
+   { name = "speed max",    desc = "Максимальная скорость (500)",       action = function()
+      local h = getHum(); if h then h.WalkSpeed = 500 end
+   end },
+   { name = "speed reset",  desc = "Сбросить скорость (16)",            action = function()
+      local h = getHum(); if h then h.WalkSpeed = 16 end
+   end },
+   { name = "rejoin",       desc = "Перезайти на сервер",               action = function()
+      game:GetService("TeleportService"):Teleport(game.PlaceId, lp)
+   end },
+   { name = "respawn",      desc = "Пересоздать персонажа",             action = function()
+      lp:LoadCharacter()
+   end },
+   { name = "gravity 0",    desc = "Гравитация 0",                      action = function() workspace.Gravity = 0 end },
+   { name = "gravity reset",desc = "Сбросить гравитацию",               action = function() workspace.Gravity = 196.2 end },
+   { name = "fps boost",    desc = "Включить FPS Booster",              action = function()
+      if not FPSBooster.active then FPSBooster:Enable() end
+   end },
+   { name = "theme purple", desc = "Тема: Purple",   action = function() ThemeSystem:Apply("Purple") end },
+   { name = "theme blue",   desc = "Тема: Blue",     action = function() ThemeSystem:Apply("Blue")   end },
+   { name = "theme red",    desc = "Тема: Red",      action = function() ThemeSystem:Apply("Red")    end },
+   { name = "theme green",  desc = "Тема: Green",    action = function() ThemeSystem:Apply("Green")  end },
+   { name = "theme gold",   desc = "Тема: Gold",     action = function() ThemeSystem:Apply("Gold")   end },
+}
+
+function CommandPalette:Search(query)
+   query = query:lower():gsub("^%s+",""):gsub("%s+$","")
+   if query == "" then return {} end
+   local results = {}
+   for _, cmd in ipairs(self.commands) do
+      if cmd.name:find(query, 1, true) or cmd.desc:lower():find(query, 1, true) then
+         table.insert(results, cmd)
+      end
+   end
+   return results
+end
+
+function CommandPalette:Execute(query)
+   local results = self:Search(query)
+   if #results == 0 then
+      notify("🔍", "Команда не найдена: " .. query, 3)
+      return false
+   end
+   -- Выполняем первое совпадение
+   local cmd = results[1]
+   pcall(cmd.action)
+   notify("⚡ Команда", cmd.name .. " — " .. cmd.desc, 2)
+   return true
+end
+
+-- ────────────────────────────────────────────────────────────────
+--  6. PLUGIN SYSTEM
+--  Динамически регистрирует расширения в рантайме
+-- ────────────────────────────────────────────────────────────────
+local PluginSystem = {}
+PluginSystem._plugins = {}
+
+function PluginSystem:Register(plugin)
+   -- plugin = { Name, Version, Init, Cleanup }
+   if not plugin.Name or not plugin.Init then return false end
+   if self._plugins[plugin.Name] then
+      notify("⚠️ Plugin", plugin.Name .. " уже загружен", 3)
+      return false
+   end
+   local ok, err = pcall(plugin.Init)
+   if ok then
+      self._plugins[plugin.Name] = plugin
+      notify("🔌 Plugin", plugin.Name .. " v" .. (plugin.Version or "?") .. " загружен", 3)
+      return true
+   else
+      notify("❌ Plugin", plugin.Name .. ": " .. tostring(err), 5)
+      return false
+   end
+end
+
+function PluginSystem:Unregister(name)
+   local p = self._plugins[name]
+   if not p then return end
+   if p.Cleanup then pcall(p.Cleanup) end
+   self._plugins[name] = nil
+   notify("🔌 Plugin", name .. " выгружен", 2)
+end
+
+function PluginSystem:UnregisterAll()
+   for name, p in pairs(self._plugins) do
+      if p.Cleanup then pcall(p.Cleanup) end
+   end
+   self._plugins = {}
+end
+
+function PluginSystem:List()
+   local t = {}
+   for name, p in pairs(self._plugins) do
+      table.insert(t, "• " .. name .. " v" .. (p.Version or "?"))
+   end
+   return #t > 0 and table.concat(t, "\n") or "Нет плагинов"
+end
+
+-- ────────────────────────────────────────────────────────────────
+--  7-8. CONFIG MANAGER + AUTO-SAVE
+--  Несколько слотов конфигов + автосохранение каждые 30 сек
+-- ────────────────────────────────────────────────────────────────
+local ConfigManager = {}
+ConfigManager._slots     = {"Config1", "Config2", "Config3"}
+ConfigManager._activeSlot = "Config1"
+ConfigManager._autoConn  = nil
+
+function ConfigManager:_fileName(slot)
+   return "MistyDany_" .. slot .. ".json"
+end
+
+function ConfigManager:Save(slot)
+   slot = slot or self._activeSlot
+   -- Собираем текущее состояние всех настроек
+   local data = {
+      flySpeed        = flySpeed,
+      speedhackVal    = speedhackVal,
+      jumpVal         = jumpVal,
+      freecamSpeed    = freecamSpeed,
+      crosshairSize   = crosshairSize,
+      crosshairGap    = crosshairGap,
+      espLines        = espLines,
+      espBoxes        = espBoxes,
+      espNames        = espNames,
+      espDist         = espDist,
+      espHealth       = espHealth,
+      espHighlight    = espHighlight,
+      theme           = ThemeSystem.current,
+      savedPositions  = {},   -- CFrame не сериализуется — пропускаем
+   }
+   -- Сохраняем пользовательские скрипты тоже
+   data.userScripts = ScriptLoader.userScripts
+
+   local ok = pcall(function()
+      writefile(self:_fileName(slot), HttpService:JSONEncode(data))
+   end)
+   notify("💾 Конфиг", (ok and "Сохранено в " or "Ошибка: ") .. slot, 2)
+end
+
+function ConfigManager:Load(slot)
+   slot = slot or self._activeSlot
+   local ok, data = pcall(function()
+      return HttpService:JSONDecode(readfile(self:_fileName(slot)))
+   end)
+   if not ok or type(data) ~= "table" then
+      notify("❌ Конфиг", "Не найден: " .. slot, 3); return
+   end
+
+   -- Применяем загруженные значения
+   if data.flySpeed     then flySpeed     = data.flySpeed     end
+   if data.speedhackVal then speedhackVal = data.speedhackVal
+      local h = getHum(); if h then h.WalkSpeed = speedhackVal end
+   end
+   if data.freecamSpeed then freecamSpeed = data.freecamSpeed end
+   if data.crosshairSize then crosshairSize = data.crosshairSize end
+   if data.crosshairGap  then crosshairGap  = data.crosshairGap  end
+   if data.espLines     ~= nil then espLines    = data.espLines    end
+   if data.espBoxes     ~= nil then espBoxes    = data.espBoxes    end
+   if data.espNames     ~= nil then espNames    = data.espNames    end
+   if data.espDist      ~= nil then espDist     = data.espDist     end
+   if data.espHealth    ~= nil then espHealth   = data.espHealth   end
+   if data.espHighlight ~= nil then espHighlight= data.espHighlight end
+   if data.theme        then ThemeSystem:Apply(data.theme) end
+   if data.userScripts and type(data.userScripts) == "table" then
+      ScriptLoader.userScripts = data.userScripts
+   end
+
+   self._activeSlot = slot
+   notify("📂 Конфиг", "Загружен: " .. slot, 2)
+end
+
+function ConfigManager:StartAutoSave(interval)
+   interval = interval or 30
+   if self._autoConn then self._autoConn:Disconnect() end
+   -- Используем task.delay в цикле
+   local function loop()
+      while true do
+         task.wait(interval)
+         self:Save()
+      end
+   end
+   task.spawn(loop)
+   notify("💾 Авто-сохранение", "Каждые " .. interval .. " сек", 3)
+end
+
+-- Запускаем авто-сохранение
+ConfigManager:StartAutoSave(30)
+
+-- ────────────────────────────────────────────────────────────────
+--  10. DRAGGABLE WATERMARK
+--  Перетаскивание водяного знака мышкой
+-- ────────────────────────────────────────────────────────────────
+local WatermarkDrag = {}
+WatermarkDrag.dragging  = false
+WatermarkDrag.dragStart = Vector2.new()
+WatermarkDrag.startPos  = Vector2.new(10, 10)
+WatermarkDrag.pos       = Vector2.new(10, 10)   -- текущая позиция
+
+-- Детектируем клик по области watermark и тащим
+ConnectionManager:Add(
+   UserInputService.InputBegan:Connect(function(input)
+      if input.UserInputType ~= Enum.UserInputType.MouseButton1 then return end
+      local mp = Vector2.new(input.Position.X, input.Position.Y)
+      local p  = WatermarkDrag.pos
+      -- Проверяем попадание в bbox watermark (260x28)
+      if mp.X >= p.X and mp.X <= p.X + 260
+      and mp.Y >= p.Y and mp.Y <= p.Y + 28 then
+         WatermarkDrag.dragging  = true
+         WatermarkDrag.dragStart = mp
+         WatermarkDrag.startPos  = p
+      end
+   end),
+   "watermark_drag_begin"
+)
+
+ConnectionManager:Add(
+   UserInputService.InputEnded:Connect(function(input)
+      if input.UserInputType == Enum.UserInputType.MouseButton1 then
+         WatermarkDrag.dragging = false
+         -- Сохраняем позицию
+         SettingsRegistry:Set("watermark_x", WatermarkDrag.pos.X)
+         SettingsRegistry:Set("watermark_y", WatermarkDrag.pos.Y)
+      end
+   end),
+   "watermark_drag_end"
+)
+
+ConnectionManager:Add(
+   UserInputService.InputChanged:Connect(function(input)
+      if not WatermarkDrag.dragging then return end
+      if input.UserInputType ~= Enum.UserInputType.MouseMovement then return end
+      local mp   = Vector2.new(input.Position.X, input.Position.Y)
+      local diff = mp - WatermarkDrag.dragStart
+      local newPos = WatermarkDrag.startPos + diff
+
+      -- Клампируем в пределах экрана
+      local vp = cam.ViewportSize
+      newPos = Vector2.new(
+         math.clamp(newPos.X, 0, vp.X - 265),
+         math.clamp(newPos.Y, 0, vp.Y - 35)
+      )
+      WatermarkDrag.pos = newPos
+
+      -- Двигаем все элементы watermark
+      pcall(function()
+         Watermark.bg.Position  = newPos
+         Watermark.bar.Position = newPos
+         Watermark.txt.Position = Vector2.new(newPos.X + 6, newPos.Y + 7)
+      end)
+   end),
+   "watermark_drag_move"
+)
+
+-- Восстанавливаем позицию из Settings
+do
+   local sx = SettingsRegistry:Get("watermark_x", 10)
+   local sy = SettingsRegistry:Get("watermark_y", 10)
+   WatermarkDrag.pos = Vector2.new(sx, sy)
+   pcall(function()
+      Watermark.bg.Position  = WatermarkDrag.pos
+      Watermark.bar.Position = WatermarkDrag.pos
+      Watermark.txt.Position = Vector2.new(sx + 6, sy + 7)
+   end)
+end
+
+-- ════════════════════════════════════════════════════════════════
+--  ██  ВКЛАДКИ НОВЫХ СИСТЕМ  ████████████████████████████████
+-- ════════════════════════════════════════════════════════════════
+
+-- ╔══════════════════════════╗
+-- ║  SCRIPT LOADER v2        ║
+-- ╚══════════════════════════╝
+local TabLoader = Window:CreateTab("📜 Загрузчик", 4483362458)
+
+TabLoader:CreateSection("📚 Библиотека скриптов")
+
+for _, entry in ipairs(ScriptLoader.library) do
+   TabLoader:CreateButton({
+      Name = "▶️ [" .. entry.Category .. "] " .. entry.Name,
+      Callback = function()
+         ScriptLoader:Run(entry)
+      end
+   })
+end
+
+TabLoader:CreateSection("➕ Добавить свой скрипт")
+
+local loaderName   = ""
+local loaderSource = ""
+local loaderType   = "loadstring"
+local loaderCat    = "User"
+
+TabLoader:CreateInput({
+   Name = "📝 Название",
+   PlaceholderText = "Мой скрипт",
+   RemoveTextAfterFocusLost = false,
+   Callback = function(v) loaderName = v end
+})
+
+TabLoader:CreateInput({
+   Name = "🔗 URL или Lua код",
+   PlaceholderText = "https://... или код",
+   RemoveTextAfterFocusLost = false,
+   Callback = function(v) loaderSource = v end
+})
+
+TabLoader:CreateInput({
+   Name = "📁 Категория",
+   PlaceholderText = "Tools / Admin / Fun / User",
+   RemoveTextAfterFocusLost = false,
+   Callback = function(v) loaderCat = v ~= "" and v or "User" end
+})
+
+TabLoader:CreateDropdown({
+   Name = "⚙️ Тип",
+   Options = {"loadstring (URL)", "code (Lua)"},
+   CurrentOption = "loadstring (URL)",
+   Callback = function(opt)
+      local o = type(opt) == "table" and opt[1] or opt
+      loaderType = o:find("code") and "code" or "loadstring"
+   end
+})
+
+TabLoader:CreateButton({
+   Name = "💾 Сохранить скрипт",
+   Callback = function()
+      if loaderName == "" or loaderSource == "" then
+         notify("❌", "Заполни название и источник!", 3); return
+      end
+      local ok = ScriptLoader:AddUserScript(loaderName, loaderSource, loaderType, loaderCat)
+      if ok then notify("✅", "Сохранено: " .. loaderName, 2) end
+   end
+})
+
+TabLoader:CreateButton({
+   Name = "▶️ Сохранить и запустить",
+   Callback = function()
+      if loaderName == "" or loaderSource == "" then
+         notify("❌", "Заполни название и источник!", 3); return
+      end
+      ScriptLoader:AddUserScript(loaderName, loaderSource, loaderType, loaderCat)
+      ScriptLoader:Run({
+         Name   = loaderName,
+         Source = loaderSource,
+         Type   = loaderType,
+      })
+   end
+})
+
+TabLoader:CreateButton({
+   Name = "⚡ Быстрый запуск (без сохранения)",
+   Callback = function()
+      if loaderSource == "" then notify("❌", "Заполни источник!", 3); return end
+      ScriptLoader:Run({
+         Name   = loaderName ~= "" and loaderName or "Quick Script",
+         Source = loaderSource,
+         Type   = loaderType,
+      })
+   end
+})
+
+TabLoader:CreateSection("📂 Мои сохранённые скрипты")
+
+TabLoader:CreateButton({
+   Name = "📋 Показать список",
+   Callback = function()
+      if #ScriptLoader.userScripts == 0 then
+         notify("📂", "Нет сохранённых скриптов", 3); return
+      end
+      local lines = {}
+      for i, s in ipairs(ScriptLoader.userScripts) do
+         table.insert(lines, i .. ". [" .. (s.Category or "?") .. "] " .. s.Name
+            .. "  (" .. (s.Added or "") .. ")")
+      end
+      local out = table.concat(lines, "\n")
+      print("=== 📂 Мои скрипты ===\n" .. out)
+      setclipboard(out)
+      notify("📂", #ScriptLoader.userScripts .. " скриптов — в консоли", 4)
+   end
+})
+
+TabLoader:CreateButton({
+   Name = "▶️ Запустить последний сохранённый",
+   Callback = function()
+      if #ScriptLoader.userScripts == 0 then
+         notify("❌", "Список пуст", 3); return
+      end
+      ScriptLoader:Run(ScriptLoader.userScripts[1])
+   end
+})
+
+TabLoader:CreateButton({
+   Name = "📝 Показать лог запусков",
+   Callback = function()
+      if #scriptLog == 0 then notify("📝", "Лог пуст", 2); return end
+      local lines = {}
+      for _, e in ipairs(scriptLog) do
+         local s = e.OK and "✅" or "❌"
+         local err = (not e.OK and e.Err ~= "") and (" — " .. e.Err) or ""
+         table.insert(lines, s .. " [" .. e.Time .. "] " .. e.Name .. err)
+      end
+      local out = table.concat(lines, "\n")
+      print("=== 📝 Лог ===\n" .. out)
+      setclipboard(out)
+      notify("📝", #scriptLog .. " записей — в консоли", 3)
+   end
+})
+
+TabLoader:CreateButton({
+   Name = "🗑️ Очистить все сохранённые",
+   Callback = function()
+      ScriptLoader.userScripts = {}
+      ScriptLoader:SaveUserToDisk()
+      notify("🗑️", "Список очищен", 2)
+   end
+})
+
+-- ╔══════════════════════════╗
+-- ║  COMMAND PALETTE         ║
+-- ╚══════════════════════════╝
+local TabCommands = Window:CreateTab("⚡ Команды", 4483362458)
+
+TabCommands:CreateSection("🔍 Поиск и выполнение")
+
+local cmdQuery = ""
+TabCommands:CreateInput({
+   Name = "🔍 Поиск команды",
+   PlaceholderText = "fly, god, esp, theme red...",
+   RemoveTextAfterFocusLost = false,
+   Callback = function(v) cmdQuery = v end
+})
+
+TabCommands:CreateButton({
+   Name = "⚡ Выполнить",
+   Callback = function()
+      if cmdQuery == "" then notify("🔍", "Введи команду", 3); return end
+      CommandPalette:Execute(cmdQuery)
+   end
+})
+
+TabCommands:CreateButton({
+   Name = "📋 Все команды",
+   Callback = function()
+      local lines = {}
+      for _, cmd in ipairs(CommandPalette.commands) do
+         table.insert(lines, "• " .. cmd.name .. " — " .. cmd.desc)
+      end
+      local out = table.concat(lines, "\n")
+      print("=== ⚡ Команды ===\n" .. out)
+      setclipboard(out)
+      notify("📋", #CommandPalette.commands .. " команд — в консоли", 3)
+   end
+})
+
+TabCommands:CreateSection("⚡ Быстрые команды")
+
+local quickCmds = {
+   { "🚀 Макс. скорость",   "speed max"    },
+   { "🔄 Сброс скорости",   "speed reset"  },
+   { "🌍 Гравитация = 0",   "gravity 0"    },
+   { "🌍 Сброс гравитации", "gravity reset" },
+   { "☀️ Fullbright тоггл", "fullbright"   },
+   { "⚡ FPS Boost",        "fps boost"    },
+   { "💀 Respawn",          "respawn"      },
+   { "🔄 Rejoin",           "rejoin"       },
+}
+
+for _, qc in ipairs(quickCmds) do
+   TabCommands:CreateButton({
+      Name = qc[1],
+      Callback = function() CommandPalette:Execute(qc[2]) end
+   })
+end
+
+-- ╔══════════════════════════╗
+-- ║  CONFIG MANAGER          ║
+-- ╚══════════════════════════╝
+local TabConfig = Window:CreateTab("💾 Конфиги", 4483362458)
+
+TabConfig:CreateSection("💾 Слоты конфигов")
+
+for _, slotName in ipairs(ConfigManager._slots) do
+   TabConfig:CreateButton({
+      Name = "💾 Сохранить → " .. slotName,
+      Callback = function() ConfigManager:Save(slotName) end
+   })
+   TabConfig:CreateButton({
+      Name = "📂 Загрузить ← " .. slotName,
+      Callback = function() ConfigManager:Load(slotName) end
+   })
+end
+
+TabConfig:CreateSection("⚙️ Авто-сохранение")
+
+TabConfig:CreateToggle({
+   Name = "⏰ Авто-сохранение каждые 30 сек",
+   CurrentValue = true,
+   Callback = function(v)
+      if v then ConfigManager:StartAutoSave(30)
+      else notify("⏰ Авто-сохранение", "Выключено", 2) end
+   end
+})
+
+TabConfig:CreateButton({
+   Name = "💾 Сохранить сейчас",
+   Callback = function() ConfigManager:Save() end
+})
+
+TabConfig:CreateSection("🎨 Темы")
+
+for themeName, _ in pairs(ThemeSystem.themes) do
+   TabConfig:CreateButton({
+      Name = "🎨 Тема: " .. themeName,
+      Callback = function() ThemeSystem:Apply(themeName) end
+   })
+end
+
+TabConfig:CreateSection("🔌 Плагины")
+
+TabConfig:CreateButton({
+   Name = "📋 Список плагинов",
+   Callback = function()
+      local list = PluginSystem:List()
+      print("=== 🔌 Плагины ===\n" .. list)
+      notify("🔌", list:sub(1, 100), 4)
+   end
+})
+
+TabConfig:CreateButton({
+   Name = "📊 Статистика (соединения)",
+   Callback = function()
+      local info = string.format(
+         "Connections: %d\nUser scripts: %d\nScript log: %d\nTheme: %s\nConfig slot: %s",
+         ConnectionManager:Count(),
+         #ScriptLoader.userScripts,
+         #scriptLog,
+         ThemeSystem.current,
+         ConfigManager._activeSlot
+      )
+      print("=== 📊 Статистика ===\n" .. info)
+      notify("📊", info, 6)
+   end
+})
+
+-- ════════════════════════════════════════════════════════════════
+--  ОБНОВЛЯЕМ MistyCleanupV2 чтобы включал новые системы
+-- ════════════════════════════════════════════════════════════════
+local _oldCleanup = _G.MistyCleanupV2
+_G.MistyCleanupV2 = function()
+   if _oldCleanup then pcall(_oldCleanup) end
+   -- Connection Manager
+   ConnectionManager:CleanAll()
+   -- Plugin System
+   PluginSystem:UnregisterAll()
+   -- Сохраняем перед выходом
+   ConfigManager:Save()
+   ScriptLoader:SaveUserToDisk()
+   SettingsRegistry:SaveAll()
+end
+
+-- ════════════════════════════════════════════════════════════════
+--  СТАРТ: анти-АФК по умолчанию включён
+-- ════════════════════════════════════════════════════════════════
+do
+   local vu=game:GetService("VirtualUser")
+   antiAfkConn=lp.Idled:Connect(function()
+      vu:CaptureController(); vu:ClickButton2(Vector2.new())
+   end)
+end
+
+notify("🌙 MistyDany Hub v3.1","Загружено ✓  |  by Danil",4)

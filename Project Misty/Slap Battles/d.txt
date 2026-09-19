@@ -1,11 +1,12 @@
 --[[
-    Misty_Dany Hub | Blood Zone V6 (Full Edition)
+    Misty_Dany Hub | Blood Zone V7 (Ultimate)
     Вкладки: Бой / Движ / Друзья / Фичи / Игрок / Игроки
-    - Fly + настройка скорости полёта, Noclip, Click TP, TP вперёд/вверх, TP к игрокам
-    - FreeCam, Прицел, Авто-спринт, Звук попадания
-    - Игрок: Infinite Jump, Jump Power, Walk Speed, Noclip
-    - Игроки: выбор игрока, слежка, инфо (UserID, HP, дистанция, команда)
-    - Hotkeys: Insert - свернуть, Delete - выгрузить
+    Новое из V4:
+    - Выбор части тела (Голова / Тело) для аимбота
+    - Слайдер размера FOV (drag/touch)
+    - Авто-лок аимбота по клавише 0
+    - ESP-тэги над головой: Ник [HP] (Дистанция)
+    - Hotkey: 0 - авто-лок
 --]]
 
 local Players = game:GetService("Players")
@@ -23,6 +24,8 @@ local Camera = Workspace.CurrentCamera
 --------------------------------------------------------------------------------
 local Settings = {
     ESP = true, Aimbot = true, AutoShoot = true,
+    TargetPart = "Head", -- "Head" или "HumanoidRootPart"
+    AutoLock0 = false,
     Fly = false, FlySpeed = 55,
     Noclip = false, ClickTP = false,
     FreeCam = false, Crosshair = false,
@@ -37,10 +40,10 @@ local Settings = {
 }
 
 --------------------------------------------------------------------------------
--- GUI
+-- GUI ROOT
 --------------------------------------------------------------------------------
 local ScreenGui = Instance.new("ScreenGui")
-ScreenGui.Name = "MistyDany_BloodZone_V6"
+ScreenGui.Name = "MistyDany_BloodZone_V7"
 ScreenGui.ResetOnSpawn = false
 ScreenGui.IgnoreGuiInset = true
 
@@ -68,8 +71,8 @@ ToggleStroke.Color = Color3.fromRGB(255, 255, 255); ToggleStroke.Thickness = 1.5
 
 -- Главное окно
 local MainFrame = Instance.new("Frame")
-MainFrame.Size = UDim2.new(0, 400, 0, 440)
-MainFrame.Position = UDim2.new(0.5, -200, 0.25, -220)
+MainFrame.Size = UDim2.new(0, 420, 0, 470)
+MainFrame.Position = UDim2.new(0.5, -210, 0.25, -235)
 MainFrame.BackgroundColor3 = Color3.fromRGB(18, 18, 24)
 MainFrame.BorderSizePixel = 0
 MainFrame.ClipsDescendants = true
@@ -88,7 +91,7 @@ local Title = Instance.new("TextLabel", Header)
 Title.Size = UDim2.new(1, -80, 1, 0)
 Title.Position = UDim2.new(0, 12, 0, 0)
 Title.BackgroundTransparency = 1
-Title.Text = "Misty_Dany Hub | Blood Zone V6"
+Title.Text = "Misty_Dany Hub | Blood Zone V7"
 Title.TextColor3 = Color3.fromRGB(240, 240, 240)
 Title.TextSize = 13
 Title.Font = Enum.Font.GothamBold
@@ -143,7 +146,7 @@ end
 
 local function CreateTab(name, label)
     local btn = Instance.new("TextButton", TabBar)
-    btn.Size = UDim2.new(0, 58, 1, 0)
+    btn.Size = UDim2.new(0, 60, 1, 0)
     btn.BackgroundColor3 = Color3.fromRGB(32, 32, 42)
     btn.Text = label
     btn.TextColor3 = Color3.fromRGB(255, 255, 255)
@@ -180,7 +183,7 @@ local PlayersTab = CreateTab("Players", "Игроки")
 SwitchTab("Combat")
 
 --------------------------------------------------------------------------------
--- ПЕРЕТАСКИВАНИЕ / РЕСАЙЗ
+-- DRAG / RESIZE
 --------------------------------------------------------------------------------
 local function EnableDrag(header, frame)
     local dragging, dragStart, startPos
@@ -220,8 +223,8 @@ UserInputService.InputChanged:Connect(function(input)
     if resizing and (input.UserInputType == Enum.UserInputType.MouseMovement
        or input.UserInputType == Enum.UserInputType.Touch) then
         local d = input.Position - resizeStart
-        MainFrame.Size = UDim2.new(0, math.max(380, startSize.X.Offset + d.X),
-                                    0, math.max(300, startSize.Y.Offset + d.Y))
+        MainFrame.Size = UDim2.new(0, math.max(400, startSize.X.Offset + d.X),
+                                    0, math.max(320, startSize.Y.Offset + d.Y))
     end
 end)
 
@@ -269,7 +272,6 @@ local function CreateNumber(parent, text, defaultValue, callback)
     c.BackgroundColor3 = Color3.fromRGB(28, 28, 36)
     c.BorderSizePixel = 0
     Instance.new("UICorner", c).CornerRadius = UDim.new(0, 6)
-
     local lbl = Instance.new("TextLabel", c)
     lbl.Size = UDim2.new(0.55, 0, 1, 0)
     lbl.Position = UDim2.new(0, 10, 0, 0)
@@ -279,7 +281,6 @@ local function CreateNumber(parent, text, defaultValue, callback)
     lbl.Font = Enum.Font.GothamSemibold
     lbl.TextSize = 12
     lbl.TextXAlignment = Enum.TextXAlignment.Left
-
     local box = Instance.new("TextBox", c)
     box.Size = UDim2.new(0.38, -6, 0, 24)
     box.Position = UDim2.new(0.60, 0, 0.5, -12)
@@ -289,9 +290,7 @@ local function CreateNumber(parent, text, defaultValue, callback)
     box.Font = Enum.Font.Gotham
     box.TextSize = 12
     box.ClearTextOnFocus = false
-    box.TextScaled = false
     Instance.new("UICorner", box).CornerRadius = UDim.new(0, 4)
-
     box.FocusLost:Connect(function()
         local n = tonumber(box.Text)
         if n then callback(n) else box.Text = tostring(defaultValue) end
@@ -299,12 +298,102 @@ local function CreateNumber(parent, text, defaultValue, callback)
     return box
 end
 
+local function CreateSlider(parent, text, min, max, defaultValue, callback)
+    local frame = Instance.new("Frame", parent)
+    frame.Size = UDim2.new(1, -8, 0, 50)
+    frame.BackgroundColor3 = Color3.fromRGB(28, 28, 36)
+    frame.BorderSizePixel = 0
+    Instance.new("UICorner", frame).CornerRadius = UDim.new(0, 6)
+    local label = Instance.new("TextLabel", frame)
+    label.Size = UDim2.new(1, -16, 0, 18)
+    label.Position = UDim2.new(0, 10, 0, 4)
+    label.BackgroundTransparency = 1
+    label.Text = text .. ": " .. defaultValue
+    label.TextColor3 = Color3.fromRGB(230, 230, 230)
+    label.Font = Enum.Font.GothamSemibold
+    label.TextSize = 11
+    label.TextXAlignment = Enum.TextXAlignment.Left
+    local back = Instance.new("Frame", frame)
+    back.Size = UDim2.new(1, -20, 0, 8)
+    back.Position = UDim2.new(0, 10, 0, 30)
+    back.BackgroundColor3 = Color3.fromRGB(20, 20, 28)
+    back.BorderSizePixel = 0
+    Instance.new("UICorner", back).CornerRadius = UDim.new(0, 4)
+    local fill = Instance.new("Frame", back)
+    local initP = math.clamp((defaultValue - min) / (max - min), 0, 1)
+    fill.Size = UDim2.new(initP, 0, 1, 0)
+    fill.BackgroundColor3 = Color3.fromRGB(220, 35, 55)
+    fill.BorderSizePixel = 0
+    Instance.new("UICorner", fill).CornerRadius = UDim.new(0, 4)
+    local sliding = false
+    local function update(input)
+        local pos = math.clamp((input.Position.X - back.AbsolutePosition.X) / back.AbsoluteSize.X, 0, 1)
+        local val = math.floor(min + (max - min) * pos)
+        fill.Size = UDim2.new(pos, 0, 1, 0)
+        label.Text = text .. ": " .. val
+        callback(val)
+    end
+    back.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1
+           or input.UserInputType == Enum.UserInputType.Touch then
+            sliding = true; update(input)
+        end
+    end)
+    UserInputService.InputChanged:Connect(function(input)
+        if sliding and (input.UserInputType == Enum.UserInputType.MouseMovement
+           or input.UserInputType == Enum.UserInputType.Touch) then update(input) end
+    end)
+    UserInputService.InputEnded:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1
+           or input.UserInputType == Enum.UserInputType.Touch then sliding = false end
+    end)
+    return frame
+end
+
+-- Cycle кнопка (для выбора части тела)
+local function CreateCycle(parent, text, options, startIdx, callback)
+    local Btn = Instance.new("TextButton", parent)
+    Btn.Size = UDim2.new(1, -8, 0, 36)
+    Btn.BackgroundColor3 = Color3.fromRGB(32, 32, 42)
+    Btn.TextColor3 = Color3.fromRGB(255, 255, 255)
+    Btn.Font = Enum.Font.GothamSemibold
+    Btn.TextSize = 13
+    Btn.TextXAlignment = Enum.TextXAlignment.Left
+    Btn.AutoButtonColor = false
+    Instance.new("UICorner", Btn).CornerRadius = UDim.new(0, 6)
+    local idx = startIdx
+    Btn.Text = "  " .. text .. ": " .. options[idx]
+    Btn.MouseButton1Click:Connect(function()
+        idx = idx % #options + 1
+        Btn.Text = "  " .. text .. ": " .. options[idx]
+        callback(options[idx], idx)
+    end)
+    return Btn
+end
+
 --------------------------------------------------------------------------------
 -- ВКЛАДКА БОЙ
 --------------------------------------------------------------------------------
-CreateToggle(CombatTab, "ESP Подсветка", Settings.ESP, function(v) Settings.ESP = v end)
-CreateToggle(CombatTab, "Аимбот в Голову", Settings.Aimbot, function(v) Settings.Aimbot = v end)
+CreateToggle(CombatTab, "ESP Подсветка (Highlight)", Settings.ESP, function(v) Settings.ESP = v end)
+CreateToggle(CombatTab, "ESP Тэги (Ник/HP/Дист)", Settings.ESP, function(v) Settings.ESP = v end)
+CreateToggle(CombatTab, "Аимбот в голову", Settings.Aimbot, function(v) Settings.Aimbot = v end)
 CreateToggle(CombatTab, "Авто-Стрельба", Settings.AutoShoot, function(v) Settings.AutoShoot = v end)
+
+-- Выбор части тела
+CreateCycle(CombatTab, "Точка прицела", {"Голова", "Тело"}, 1, function(val)
+    Settings.TargetPart = (val == "Голова") and "Head" or "HumanoidRootPart"
+end)
+
+-- Авто-лок на клавише 0
+CreateToggle(CombatTab, "Авто-Лок (клавиша 0)", Settings.AutoLock0, function(v)
+    Settings.AutoLock0 = v
+    if v then Settings.LockedTarget = nil else Settings.LockedTarget = nil end
+end)
+
+-- Слайдер FOV
+CreateSlider(CombatTab, "Размер FOV (px)", 10, 300, Settings.FOVRadius, function(v)
+    Settings.FOVRadius = v
+end)
 
 --------------------------------------------------------------------------------
 -- FLY
@@ -335,18 +424,15 @@ local function StartFly()
         if not c then return end
         local root = c:FindFirstChild("HumanoidRootPart")
         if not root then return end
-
         local camCF = Camera.CFrame
         local fwd, right = camCF.LookVector, camCF.RightVector
         local move = Vector3.zero
-
         if UserInputService:IsKeyDown(Enum.KeyCode.W) or FlyInputs.F then move = move + fwd end
         if UserInputService:IsKeyDown(Enum.KeyCode.S) or FlyInputs.B then move = move - fwd end
         if UserInputService:IsKeyDown(Enum.KeyCode.D) or FlyInputs.R then move = move + right end
         if UserInputService:IsKeyDown(Enum.KeyCode.A) or FlyInputs.L then move = move - right end
         if UserInputService:IsKeyDown(Enum.KeyCode.Space) or FlyInputs.U then move = move + Vector3.new(0,1,0) end
         if UserInputService:IsKeyDown(Enum.KeyCode.LeftControl) or FlyInputs.D then move = move - Vector3.new(0,1,0) end
-
         if move.Magnitude > 0 then move = move.Unit end
         flyBV.Velocity = move * Settings.FlySpeed
         flyBG.CFrame = CFrame.new(root.Position, root.Position + fwd)
@@ -386,7 +472,6 @@ local function MakeFlyBtn(text, pos, key)
     b.InputBegan:Connect(function(i) if i.UserInputType == Enum.UserInputType.Touch then on() end end)
     b.InputEnded:Connect(function(i) if i.UserInputType == Enum.UserInputType.Touch then off() end end)
 end
-
 MakeFlyBtn("▲", UDim2.new(0, 76, 0, 0), "F")
 MakeFlyBtn("▼", UDim2.new(0, 76, 0, 152), "B")
 MakeFlyBtn("◄", UDim2.new(0, 0, 0, 76), "L")
@@ -420,11 +505,9 @@ CreateToggle(MoveTab, "Fly (Полёт)", Settings.Fly, function(v)
     FlyControls.Visible = v
     if v then StartFly() else StopFly() end
 end)
-
 CreateNumber(MoveTab, "Скорость полёта", Settings.FlySpeed, function(n)
     Settings.FlySpeed = math.clamp(n, 5, 500)
 end)
-
 CreateAction(MoveTab, "➡ TP вперёд (30 studs)", function()
     local char = LocalPlayer.Character
     if not char then return end
@@ -432,7 +515,6 @@ CreateAction(MoveTab, "➡ TP вперёд (30 studs)", function()
     if not hrp then return end
     hrp.CFrame = CFrame.new(hrp.Position + Camera.CFrame.LookVector * 30)
 end)
-
 CreateAction(MoveTab, "⬆ TP вверх (15 studs)", function()
     local char = LocalPlayer.Character
     if not char then return end
@@ -440,12 +522,10 @@ CreateAction(MoveTab, "⬆ TP вверх (15 studs)", function()
     if not hrp then return end
     hrp.CFrame = hrp.CFrame + Vector3.new(0, 15, 0)
 end)
-
 CreateToggle(MoveTab, "Click TP (телепорт по клику)", Settings.ClickTP, function(v)
     Settings.ClickTP = v
 end)
 
--- Список ТП к игрокам
 local TPScroll = Instance.new("ScrollingFrame", MoveTab)
 TPScroll.Size = UDim2.new(1, -8, 0, 160)
 TPScroll.BackgroundColor3 = Color3.fromRGB(22, 22, 30)
@@ -512,7 +592,6 @@ local function RefreshFriendsList()
             item.BackgroundColor3 = Color3.fromRGB(28, 28, 36)
             item.BorderSizePixel = 0
             Instance.new("UICorner", item).CornerRadius = UDim.new(0, 6)
-
             local nm = Instance.new("TextLabel", item)
             nm.Size = UDim2.new(1, -75, 1, 0)
             nm.Position = UDim2.new(0, 8, 0, 0)
@@ -523,7 +602,6 @@ local function RefreshFriendsList()
             nm.Font = Enum.Font.GothamSemibold
             nm.TextXAlignment = Enum.TextXAlignment.Left
             nm.TextTruncate = Enum.TextTruncate.AtEnd
-
             local fb = Instance.new("TextButton", item)
             fb.Size = UDim2.new(0, 60, 0, 22)
             fb.Position = UDim2.new(1, -64, 0.5, -11)
@@ -555,14 +633,12 @@ Crosshair.Position = UDim2.new(0.5, -20, 0.5, -20)
 Crosshair.BackgroundTransparency = 1
 Crosshair.Visible = false
 Crosshair.Parent = ScreenGui
-
-local crossParts = {
+for _, d in ipairs({
     {UDim2.new(0, 2, 0, 12), UDim2.new(0.5, -1, 0, 0)},
     {UDim2.new(0, 2, 0, 12), UDim2.new(0.5, -1, 1, -12)},
     {UDim2.new(0, 12, 0, 2), UDim2.new(0, 0, 0.5, -1)},
     {UDim2.new(0, 12, 0, 2), UDim2.new(1, -12, 0.5, -1)},
-}
-for _, d in ipairs(crossParts) do
+}) do
     local l = Instance.new("Frame", Crosshair)
     l.Size = d[1]; l.Position = d[2]
     l.BackgroundColor3 = Color3.fromRGB(0, 255, 100)
@@ -606,7 +682,6 @@ local function TrackHumanoid(char)
     if not plr or plr == LocalPlayer then return end
     if hitSoundTracked[hum] then return end
     hitSoundTracked[hum] = hum.Health
-
     hum:GetPropertyChangedSignal("Health"):Connect(function()
         if Settings.HitSound and hum.Health < hitSoundTracked[hum] then
             local s = Instance.new("Sound")
@@ -619,7 +694,6 @@ local function TrackHumanoid(char)
         hitSoundTracked[hum] = hum.Health
     end)
 end
-
 for _, p in ipairs(Players:GetPlayers()) do
     if p ~= LocalPlayer then
         if p.Character then TrackHumanoid(p.Character) end
@@ -637,17 +711,14 @@ CreateToggle(FeatTab, "FreeCam (Свободная камера)", Settings.Free
     Settings.FreeCam = v
     if v then StartFreeCam() else StopFreeCam() end
 end)
-
 CreateToggle(FeatTab, "Прицел на экране", Settings.Crosshair, function(v)
     Settings.Crosshair = v
     Crosshair.Visible = v
 end)
-
 CreateToggle(FeatTab, "Авто-спринт", Settings.AutoSprint, function(v) Settings.AutoSprint = v end)
 CreateNumber(FeatTab, "Скорость спринта", Settings.AutoSprintSpeed, function(n)
     Settings.AutoSprintSpeed = math.clamp(n, 16, 200)
 end)
-
 CreateToggle(FeatTab, "Звук попадания", Settings.HitSound, function(v) Settings.HitSound = v end)
 
 --------------------------------------------------------------------------------
@@ -665,12 +736,10 @@ end)
 CreateNumber(PlayerTab, "Скорость ходьбы", Settings.WalkSpeed, function(n)
     Settings.WalkSpeed = math.clamp(n, 0, 500)
 end)
-
 CreateToggle(PlayerTab, "Noclip (сквозь стены)", Settings.Noclip, function(v)
     Settings.Noclip = v
     if v then StartNoclip() else StopNoclip() end
 end)
-
 CreateAction(PlayerTab, "🔄 Сбросить (16 / 50)", function()
     Settings.WalkSpeed = 16
     Settings.JumpPower = 50
@@ -686,7 +755,6 @@ CreateAction(PlayerTab, "🔄 Сбросить (16 / 50)", function()
     end
 end)
 
--- Поддержание WalkSpeed / JumpPower / AutoSprint
 RunService.Heartbeat:Connect(function()
     local char = LocalPlayer.Character
     if not char then return end
@@ -699,7 +767,6 @@ RunService.Heartbeat:Connect(function()
     end
 end)
 
--- Infinite jump
 UserInputService.JumpRequest:Connect(function()
     if Settings.InfiniteJump then
         local char = LocalPlayer.Character
@@ -711,7 +778,7 @@ UserInputService.JumpRequest:Connect(function()
 end)
 
 --------------------------------------------------------------------------------
--- ВКЛАДКА ИГРОКИ (выбор игрока, слежка, инфо)
+-- ВКЛАДКА ИГРОКИ
 --------------------------------------------------------------------------------
 local PlayersScroll = Instance.new("ScrollingFrame", PlayersTab)
 PlayersScroll.Size = UDim2.new(1, -8, 0, 140)
@@ -724,7 +791,7 @@ local PlayersList = Instance.new("UIListLayout", PlayersScroll)
 PlayersList.Padding = UDim.new(0, 4)
 
 local InfoPanel = Instance.new("Frame", PlayersTab)
-InfoPanel.Size = UDim2.new(1, -8, 0, 110)
+InfoPanel.Size = UDim2.new(1, -8, 0, 120)
 InfoPanel.BackgroundColor3 = Color3.fromRGB(28, 28, 36)
 InfoPanel.BorderSizePixel = 0
 Instance.new("UICorner", InfoPanel).CornerRadius = UDim.new(0, 6)
@@ -797,7 +864,6 @@ local function RefreshPlayersList()
     end
     PlayersScroll.CanvasSize = UDim2.new(0, 0, 0, PlayersList.AbsoluteContentSize.Y + 8)
 end
-
 Players.PlayerAdded:Connect(RefreshPlayersList)
 Players.PlayerRemoving:Connect(function(p)
     if Settings.SelectedPlayer == p then Settings.SelectedPlayer = nil end
@@ -806,34 +872,28 @@ Players.PlayerRemoving:Connect(function(p)
 end)
 task.spawn(RefreshPlayersList)
 
--- Обновление инфо о выбранном игроке
 RunService.RenderStepped:Connect(function()
     local plr = Settings.SelectedPlayer
     if not plr then
         InfoLabel.Text = "Игрок не выбран"
         return
     end
-
     local char = plr.Character
     local hum = char and char:FindFirstChildOfClass("Humanoid")
     local hrp = char and char:FindFirstChild("HumanoidRootPart")
-
     local hp = hum and math.floor(hum.Health) or 0
     local maxHp = hum and math.floor(hum.MaxHealth) or 100
     local dist = 0
     local lhrp = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
     if hrp and lhrp then dist = math.floor((hrp.Position - lhrp.Position).Magnitude) end
-
     local teamName = plr.Team and plr.Team.Name or "Нет"
     local isFriend = Settings.Friends[plr.UserId] and "Да" or "Нет"
-
     InfoLabel.Text = string.format(
         "Имя: %s\nНик: @%s\nUserID: %d\nHP: %d / %d\nДистанция: %d studs\nКоманда: %s\nДруг: %s",
         plr.DisplayName, plr.Name, plr.UserId, hp, maxHp, dist, teamName, isFriend
     )
 end)
 
--- Кнопки
 SpectateBtn.MouseButton1Click:Connect(function()
     local plr = Settings.SelectedPlayer
     if not plr then return end
@@ -864,7 +924,6 @@ UnselectBtn.MouseButton1Click:Connect(function()
     RefreshPlayersList()
 end)
 
--- Камера слежки
 RunService.RenderStepped:Connect(function()
     if Settings.Spectating then
         local tChar = Settings.Spectating.Character
@@ -891,11 +950,12 @@ FOVCircle.Visible = Settings.Aimbot and Settings.UIVisible
 
 RunService.RenderStepped:Connect(function()
     FOVCircle.Position = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
+    FOVCircle.Radius = Settings.FOVRadius
     FOVCircle.Visible = Settings.Aimbot and Settings.UIVisible
 end)
 
 --------------------------------------------------------------------------------
--- ESP HIGHLIGHT
+-- ESP HIGHLIGHT + BILLBOARD ТЭГИ
 --------------------------------------------------------------------------------
 local function AddHighlight(player)
     local function onChar(char)
@@ -903,11 +963,34 @@ local function AddHighlight(player)
         local hl = char:FindFirstChild("BloodZone_ESP") or Instance.new("Highlight")
         hl.Name = "BloodZone_ESP"
         hl.Adornee = char
-        hl.FillTransparency = 0.5
+        hl.FillTransparency = 0.4
         hl.OutlineColor = Color3.fromRGB(255, 255, 255)
         hl.OutlineTransparency = 0
         hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
         hl.Parent = char
+
+        task.spawn(function()
+            local head = char:WaitForChild("Head", 5)
+            if head then
+                local bgui = head:FindFirstChild("BloodZone_Tag") or Instance.new("BillboardGui")
+                bgui.Name = "BloodZone_Tag"
+                bgui.Adornee = head
+                bgui.Size = UDim2.new(0, 200, 0, 30)
+                bgui.StudsOffset = Vector3.new(0, 2.5, 0)
+                bgui.AlwaysOnTop = true
+                bgui.Parent = head
+                local label = bgui:FindFirstChild("TagLabel") or Instance.new("TextLabel")
+                label.Name = "TagLabel"
+                label.Size = UDim2.new(1, 0, 1, 0)
+                label.BackgroundTransparency = 1
+                label.TextColor3 = Color3.fromRGB(255, 255, 255)
+                label.TextStrokeTransparency = 0
+                label.TextStrokeColor3 = Color3.fromRGB(0, 0, 0)
+                label.Font = Enum.Font.GothamBold
+                label.TextSize = 12
+                label.Parent = bgui
+            end
+        end)
     end
     if player.Character then onChar(player.Character) end
     player.CharacterAdded:Connect(onChar)
@@ -922,13 +1005,25 @@ end)
 RunService.RenderStepped:Connect(function()
     for _, p in ipairs(Players:GetPlayers()) do
         if p ~= LocalPlayer and p.Character then
-            local hl = p.Character:FindFirstChild("BloodZone_ESP")
+            local char = p.Character
+            local hl = char:FindFirstChild("BloodZone_ESP")
+            local head = char:FindFirstChild("Head")
+            local bgui = head and head:FindFirstChild("BloodZone_Tag")
+            local label = bgui and bgui:FindFirstChild("TagLabel")
+            local hum = char:FindFirstChild("Humanoid")
+            local isFriend = Settings.Friends[p.UserId]
+            local mainColor = isFriend and Color3.fromRGB(0, 255, 120) or Color3.fromRGB(255, 30, 60)
+
             if hl then
                 hl.Enabled = Settings.ESP
-                if Settings.Friends[p.UserId] then
-                    hl.FillColor = Color3.fromRGB(0, 255, 120)
-                else
-                    hl.FillColor = Color3.fromRGB(255, 30, 60)
+                hl.FillColor = mainColor
+            end
+            if bgui and label then
+                bgui.Enabled = Settings.ESP
+                if hum and head and LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Head") then
+                    local dist = math.floor((head.Position - LocalPlayer.Character.Head.Position).Magnitude)
+                    label.Text = string.format("%s [%d HP] (%dm)", p.DisplayName, math.floor(math.max(0, hum.Health)), dist)
+                    label.TextColor3 = mainColor
                 end
             end
         end
@@ -936,17 +1031,26 @@ RunService.RenderStepped:Connect(function()
 end)
 
 --------------------------------------------------------------------------------
--- AIMBOT
+-- AIMBOT LOGIC
 --------------------------------------------------------------------------------
-local function IsBulletPathClear(targetHead)
-    if not targetHead then return false end
+local function GetTargetPart(char)
+    if not char then return nil end
+    if Settings.TargetPart == "Head" then
+        return char:FindFirstChild("Head")
+    else
+        return char:FindFirstChild("HumanoidRootPart") or char:FindFirstChild("UpperTorso") or char:FindFirstChild("Torso")
+    end
+end
+
+local function IsBulletPathClear(targetPart)
+    if not targetPart then return false end
     local origin = Camera.CFrame.Position
-    local ignoreList = {LocalPlayer.Character, targetHead.Parent}
+    local ignoreList = {LocalPlayer.Character, targetPart.Parent}
     for _ = 1, 5 do
         local p = RaycastParams.new()
         p.FilterType = Enum.RaycastFilterType.Exclude
         p.FilterDescendantsInstances = ignoreList
-        local res = Workspace:Raycast(origin, targetHead.Position - origin, p)
+        local res = Workspace:Raycast(origin, targetPart.Position - origin, p)
         if not res then return true end
         local hp = res.Instance
         if hp.Transparency > 0.25 or hp.Material == Enum.Material.Glass
@@ -964,12 +1068,12 @@ local function GetClosestTargetInFOV()
         if player ~= LocalPlayer and not Settings.Friends[player.UserId]
            and player.Character and player.Character:FindFirstChild("Humanoid")
            and player.Character.Humanoid.Health > 0 then
-            local head = player.Character:FindFirstChild("Head")
-            if head then
-                local sp, on = Camera:WorldToViewportPoint(head.Position)
+            local targetPart = GetTargetPart(player.Character)
+            if targetPart then
+                local sp, on = Camera:WorldToViewportPoint(targetPart.Position)
                 if on then
                     local d = (Vector2.new(sp.X, sp.Y) - center).Magnitude
-                    if d <= shortestDist and IsBulletPathClear(head) then
+                    if d <= shortestDist and IsBulletPathClear(targetPart) then
                         shortestDist = d; closest = player
                     end
                 end
@@ -983,7 +1087,6 @@ end
 -- INPUT
 --------------------------------------------------------------------------------
 local InputConn = UserInputService.InputBegan:Connect(function(input, gpe)
-    -- Click TP работает и на ПК, и на телефоне (если не клик по GUI)
     if Settings.ClickTP and not gpe then
         if input.UserInputType == Enum.UserInputType.MouseButton1
         or input.UserInputType == Enum.UserInputType.Touch then
@@ -1005,6 +1108,13 @@ local InputConn = UserInputService.InputBegan:Connect(function(input, gpe)
     if input.UserInputType == Enum.UserInputType.MouseButton2 then
         Settings.IsRMBDown = true
         Settings.LockedTarget = GetClosestTargetInFOV()
+    elseif input.KeyCode == Enum.KeyCode.Zero or input.KeyCode == Enum.KeyCode.KeypadZero then
+        Settings.AutoLock0 = not Settings.AutoLock0
+        if Settings.AutoLock0 then
+            Settings.LockedTarget = GetClosestTargetInFOV()
+        else
+            Settings.LockedTarget = nil
+        end
     elseif input.KeyCode == Enum.KeyCode.Insert then
         Settings.UIVisible = not Settings.UIVisible
         MainFrame.Visible = Settings.UIVisible
@@ -1013,8 +1123,14 @@ local InputConn = UserInputService.InputBegan:Connect(function(input, gpe)
         FOVCircle:Remove()
         ScreenGui:Destroy()
         for _, p in ipairs(Players:GetPlayers()) do
-            if p.Character and p.Character:FindFirstChild("BloodZone_ESP") then
-                p.Character.BloodZone_ESP:Destroy()
+            if p.Character then
+                if p.Character:FindFirstChild("BloodZone_ESP") then
+                    p.Character.BloodZone_ESP:Destroy()
+                end
+                local head = p.Character:FindFirstChild("Head")
+                if head and head:FindFirstChild("BloodZone_Tag") then
+                    head.BloodZone_Tag:Destroy()
+                end
             end
         end
     end
@@ -1023,7 +1139,7 @@ end)
 UserInputService.InputEnded:Connect(function(input)
     if input.UserInputType == Enum.UserInputType.MouseButton2 then
         Settings.IsRMBDown = false
-        Settings.LockedTarget = nil
+        if not Settings.AutoLock0 then Settings.LockedTarget = nil end
     end
 end)
 
@@ -1039,15 +1155,16 @@ end)
 --------------------------------------------------------------------------------
 -- AIMBOT LOOP
 --------------------------------------------------------------------------------
-local AimConn = RunService.RenderStepped:Connect(function()
-    if not Settings.Aimbot or not Settings.IsRMBDown then return end
+RunService.RenderStepped:Connect(function()
+    local isAiming = Settings.IsRMBDown or Settings.AutoLock0
+    if not Settings.Aimbot or not isAiming then return end
     local target = Settings.LockedTarget
     if target and not Settings.Friends[target.UserId]
        and target.Character and target.Character:FindFirstChild("Humanoid")
        and target.Character.Humanoid.Health > 0 then
-        local head = target.Character:FindFirstChild("Head")
-        if head and IsBulletPathClear(head) then
-            Camera.CFrame = CFrame.lookAt(Camera.CFrame.Position, head.Position)
+        local targetPart = GetTargetPart(target.Character)
+        if targetPart and IsBulletPathClear(targetPart) then
+            Camera.CFrame = CFrame.lookAt(Camera.CFrame.Position, targetPart.Position)
             if Settings.AutoShoot then
                 pcall(function()
                     mouse1press()
@@ -1062,4 +1179,4 @@ local AimConn = RunService.RenderStepped:Connect(function()
     end
 end)
 
-print("[Misty_Dany Hub V6] Загружено! Insert - свернуть, Delete - выгрузить.")
+print("[Misty_Dany Hub V7] Загружено! Insert - свернуть, Delete - выгрузить, 0 - авто-лок.")

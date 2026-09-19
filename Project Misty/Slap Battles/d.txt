@@ -1,12 +1,9 @@
 --[[
-    Misty_Dany Hub | Blood Zone V7 (Ultimate)
-    Вкладки: Бой / Движ / Друзья / Фичи / Игрок / Игроки
-    Новое из V4:
-    - Выбор части тела (Голова / Тело) для аимбота
-    - Слайдер размера FOV (drag/touch)
-    - Авто-лок аимбота по клавише 0
-    - ESP-тэги над головой: Ник [HP] (Дистанция)
-    - Hotkey: 0 - авто-лок
+    Misty_Dany Hub | Blood Zone V8 (Mobile Fixed)
+    - Перетаскивание за любое пустое место
+    - Плавающая кнопка LOCK (авто-лок для телефона)
+    - Авто-стрельба с фолбэком keypress
+    - 6 вкладок: Бой / Движ / Друзья / Фичи / Игрок / Игроки
 --]]
 
 local Players = game:GetService("Players")
@@ -24,8 +21,8 @@ local Camera = Workspace.CurrentCamera
 --------------------------------------------------------------------------------
 local Settings = {
     ESP = true, Aimbot = true, AutoShoot = true,
-    TargetPart = "Head", -- "Head" или "HumanoidRootPart"
-    AutoLock0 = false,
+    TargetPart = "Head",
+    AutoLock = false,
     Fly = false, FlySpeed = 55,
     Noclip = false, ClickTP = false,
     FreeCam = false, Crosshair = false,
@@ -43,7 +40,7 @@ local Settings = {
 -- GUI ROOT
 --------------------------------------------------------------------------------
 local ScreenGui = Instance.new("ScreenGui")
-ScreenGui.Name = "MistyDany_BloodZone_V7"
+ScreenGui.Name = "MistyDany_BloodZone_V8"
 ScreenGui.ResetOnSpawn = false
 ScreenGui.IgnoreGuiInset = true
 
@@ -54,7 +51,7 @@ pcall(function()
 end)
 if not ScreenGui.Parent then ScreenGui.Parent = LocalPlayer:WaitForChild("PlayerGui") end
 
--- Плавающая кнопка
+-- Плавающая кнопка "M" (открыть/закрыть меню)
 local ToggleBtn = Instance.new("TextButton")
 ToggleBtn.Size = UDim2.new(0, 46, 0, 46)
 ToggleBtn.Position = UDim2.new(1, -60, 0, 80)
@@ -68,6 +65,21 @@ ToggleBtn.Parent = ScreenGui
 Instance.new("UICorner", ToggleBtn).CornerRadius = UDim.new(1, 0)
 local ToggleStroke = Instance.new("UIStroke", ToggleBtn)
 ToggleStroke.Color = Color3.fromRGB(255, 255, 255); ToggleStroke.Thickness = 1.5
+
+-- Плавающая кнопка "LOCK" (авто-лок для телефона)
+local LockBtn = Instance.new("TextButton")
+LockBtn.Size = UDim2.new(0, 46, 0, 46)
+LockBtn.Position = UDim2.new(1, -60, 0, 136)
+LockBtn.BackgroundColor3 = Color3.fromRGB(60, 60, 70)
+LockBtn.Text = "🔒"
+LockBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+LockBtn.Font = Enum.Font.GothamBold
+LockBtn.TextSize = 20
+LockBtn.AutoButtonColor = false
+LockBtn.Parent = ScreenGui
+Instance.new("UICorner", LockBtn).CornerRadius = UDim.new(1, 0)
+local LockStroke = Instance.new("UIStroke", LockBtn)
+LockStroke.Color = Color3.fromRGB(255, 255, 255); LockStroke.Thickness = 1.5
 
 -- Главное окно
 local MainFrame = Instance.new("Frame")
@@ -91,7 +103,7 @@ local Title = Instance.new("TextLabel", Header)
 Title.Size = UDim2.new(1, -80, 1, 0)
 Title.Position = UDim2.new(0, 12, 0, 0)
 Title.BackgroundTransparency = 1
-Title.Text = "Misty_Dany Hub | Blood Zone V7"
+Title.Text = "Misty_Dany Hub | Blood Zone V8"
 Title.TextColor3 = Color3.fromRGB(240, 240, 240)
 Title.TextSize = 13
 Title.Font = Enum.Font.GothamBold
@@ -117,7 +129,6 @@ ResizeBtn.TextColor3 = Color3.fromRGB(220, 35, 55)
 ResizeBtn.TextSize = 14
 ResizeBtn.Font = Enum.Font.GothamBold
 
--- Tab bar
 local TabBar = Instance.new("Frame", MainFrame)
 TabBar.Size = UDim2.new(1, -20, 0, 30)
 TabBar.Position = UDim2.new(0, 10, 0, 42)
@@ -183,26 +194,53 @@ local PlayersTab = CreateTab("Players", "Игроки")
 SwitchTab("Combat")
 
 --------------------------------------------------------------------------------
--- DRAG / RESIZE
+-- DRAG / RESIZE (перетаскивание за пустое место)
 --------------------------------------------------------------------------------
+local function IsPointerOverInteractive(pos)
+    local ok, objs = pcall(function()
+        return ScreenGui:GetGuiObjectsAtPosition(pos.X, pos.Y)
+    end)
+    if not ok or not objs then return false end
+    for _, o in ipairs(objs) do
+        if o:IsA("GuiButton") or o:IsA("TextBox") then
+            return true
+        end
+    end
+    return false
+end
+
 local function EnableDrag(header, frame)
     local dragging, dragStart, startPos
-    header.InputBegan:Connect(function(input)
+
+    local function startDrag(input)
+        if input.UserInputType ~= Enum.UserInputType.MouseButton1
+        and input.UserInputType ~= Enum.UserInputType.Touch then return end
+        if IsPointerOverInteractive(input.Position) then return end
+        dragging = true
+        dragStart = input.Position
+        startPos = frame.Position
+    end
+
+    local function stopDrag(input)
         if input.UserInputType == Enum.UserInputType.MouseButton1
-           or input.UserInputType == Enum.UserInputType.Touch then
-            dragging = true; dragStart = input.Position; startPos = frame.Position
+        or input.UserInputType == Enum.UserInputType.Touch then
+            dragging = false
         end
-    end)
-    header.InputEnded:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.MouseButton1
-           or input.UserInputType == Enum.UserInputType.Touch then dragging = false end
-    end)
+    end
+
+    header.InputBegan:Connect(startDrag)
+    frame.InputBegan:Connect(startDrag)
+    header.InputEnded:Connect(stopDrag)
+    frame.InputEnded:Connect(stopDrag)
+
     UserInputService.InputChanged:Connect(function(input)
         if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement
-           or input.UserInputType == Enum.UserInputType.Touch) then
+        or input.UserInputType == Enum.UserInputType.Touch) then
             local d = input.Position - dragStart
-            frame.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + d.X,
-                                        startPos.Y.Scale, startPos.Y.Offset + d.Y)
+            frame.Position = UDim2.new(
+                startPos.X.Scale, startPos.X.Offset + d.X,
+                startPos.Y.Scale, startPos.Y.Offset + d.Y
+            )
         end
     end)
 end
@@ -242,13 +280,17 @@ local function CreateToggle(parent, text, state, callback)
     Btn.TextXAlignment = Enum.TextXAlignment.Left
     Btn.AutoButtonColor = false
     Instance.new("UICorner", Btn).CornerRadius = UDim.new(0, 6)
-    Btn.MouseButton1Click:Connect(function()
-        state = not state
+    local setState
+    setState = function(v)
+        state = v
         Btn.BackgroundColor3 = state and Color3.fromRGB(180, 30, 45) or Color3.fromRGB(32, 32, 42)
         Btn.Text = "  " .. text .. ": " .. (state and "ON" or "OFF")
+    end
+    Btn.MouseButton1Click:Connect(function()
+        setState(not state)
         callback(state)
     end)
-    return Btn
+    return Btn, setState
 end
 
 local function CreateAction(parent, text, callback)
@@ -313,7 +355,10 @@ local function CreateSlider(parent, text, min, max, defaultValue, callback)
     label.Font = Enum.Font.GothamSemibold
     label.TextSize = 11
     label.TextXAlignment = Enum.TextXAlignment.Left
-    local back = Instance.new("Frame", frame)
+    -- Слайдер как TextButton чтобы не тащил окно
+    local back = Instance.new("TextButton", frame)
+    back.Text = ""
+    back.AutoButtonColor = false
     back.Size = UDim2.new(1, -20, 0, 8)
     back.Position = UDim2.new(0, 10, 0, 30)
     back.BackgroundColor3 = Color3.fromRGB(20, 20, 28)
@@ -350,7 +395,6 @@ local function CreateSlider(parent, text, min, max, defaultValue, callback)
     return frame
 end
 
--- Cycle кнопка (для выбора части тела)
 local function CreateCycle(parent, text, options, startIdx, callback)
     local Btn = Instance.new("TextButton", parent)
     Btn.Size = UDim2.new(1, -8, 0, 36)
@@ -375,22 +419,26 @@ end
 -- ВКЛАДКА БОЙ
 --------------------------------------------------------------------------------
 CreateToggle(CombatTab, "ESP Подсветка (Highlight)", Settings.ESP, function(v) Settings.ESP = v end)
-CreateToggle(CombatTab, "ESP Тэги (Ник/HP/Дист)", Settings.ESP, function(v) Settings.ESP = v end)
-CreateToggle(CombatTab, "Аимбот в голову", Settings.Aimbot, function(v) Settings.Aimbot = v end)
+CreateToggle(CombatTab, "Аимбот", Settings.Aimbot, function(v) Settings.Aimbot = v end)
 CreateToggle(CombatTab, "Авто-Стрельба", Settings.AutoShoot, function(v) Settings.AutoShoot = v end)
 
--- Выбор части тела
 CreateCycle(CombatTab, "Точка прицела", {"Голова", "Тело"}, 1, function(val)
     Settings.TargetPart = (val == "Голова") and "Head" or "HumanoidRootPart"
 end)
 
--- Авто-лок на клавише 0
-CreateToggle(CombatTab, "Авто-Лок (клавиша 0)", Settings.AutoLock0, function(v)
-    Settings.AutoLock0 = v
-    if v then Settings.LockedTarget = nil else Settings.LockedTarget = nil end
+-- Авто-Лок (тумблер) — теперь с синхронизацией с плавающей кнопкой
+local AutoLockToggle, SetAutoLockState
+AutoLockToggle, SetAutoLockState = CreateToggle(CombatTab, "Авто-Лок", Settings.AutoLock, function(v)
+    Settings.AutoLock = v
+    if v then
+        Settings.LockedTarget = GetClosestTargetInFOV and GetClosestTargetInFOV() or nil
+        LockBtn.BackgroundColor3 = Color3.fromRGB(0, 180, 80)
+    else
+        Settings.LockedTarget = nil
+        LockBtn.BackgroundColor3 = Color3.fromRGB(60, 60, 70)
+    end
 end)
 
--- Слайдер FOV
 CreateSlider(CombatTab, "Размер FOV (px)", 10, 300, Settings.FOVRadius, function(v)
     Settings.FOVRadius = v
 end)
@@ -1061,7 +1109,7 @@ local function IsBulletPathClear(targetPart)
     return false
 end
 
-local function GetClosestTargetInFOV()
+function GetClosestTargetInFOV()
     local closest, shortestDist = nil, Settings.FOVRadius
     local center = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
     for _, player in ipairs(Players:GetPlayers()) do
@@ -1081,6 +1129,19 @@ local function GetClosestTargetInFOV()
         end
     end
     return closest
+end
+
+-- Авто-стрельба с фолбэком для мобилы
+local function FireWeapon()
+    pcall(function()
+        if mouse1press and mouse1release then
+            mouse1press()
+            task.delay(0.05, function() pcall(mouse1release) end)
+        elseif keypress and keyrelease then
+            keypress(0x01)
+            task.delay(0.05, function() keyrelease(0x01) end)
+        end
+    end)
 end
 
 --------------------------------------------------------------------------------
@@ -1109,12 +1170,10 @@ local InputConn = UserInputService.InputBegan:Connect(function(input, gpe)
         Settings.IsRMBDown = true
         Settings.LockedTarget = GetClosestTargetInFOV()
     elseif input.KeyCode == Enum.KeyCode.Zero or input.KeyCode == Enum.KeyCode.KeypadZero then
-        Settings.AutoLock0 = not Settings.AutoLock0
-        if Settings.AutoLock0 then
-            Settings.LockedTarget = GetClosestTargetInFOV()
-        else
-            Settings.LockedTarget = nil
-        end
+        Settings.AutoLock = not Settings.AutoLock
+        if SetAutoLockState then SetAutoLockState(Settings.AutoLock) end
+        LockBtn.BackgroundColor3 = Settings.AutoLock and Color3.fromRGB(0, 180, 80) or Color3.fromRGB(60, 60, 70)
+        if not Settings.AutoLock then Settings.LockedTarget = nil end
     elseif input.KeyCode == Enum.KeyCode.Insert then
         Settings.UIVisible = not Settings.UIVisible
         MainFrame.Visible = Settings.UIVisible
@@ -1139,10 +1198,11 @@ end)
 UserInputService.InputEnded:Connect(function(input)
     if input.UserInputType == Enum.UserInputType.MouseButton2 then
         Settings.IsRMBDown = false
-        if not Settings.AutoLock0 then Settings.LockedTarget = nil end
+        if not Settings.AutoLock then Settings.LockedTarget = nil end
     end
 end)
 
+-- Кнопки на экране
 ToggleBtn.MouseButton1Click:Connect(function()
     Settings.UIVisible = not Settings.UIVisible
     MainFrame.Visible = Settings.UIVisible
@@ -1152,11 +1212,23 @@ CloseBtn.MouseButton1Click:Connect(function()
     MainFrame.Visible = false
 end)
 
+LockBtn.MouseButton1Click:Connect(function()
+    Settings.AutoLock = not Settings.AutoLock
+    if SetAutoLockState then SetAutoLockState(Settings.AutoLock) end
+    if Settings.AutoLock then
+        Settings.LockedTarget = GetClosestTargetInFOV()
+        LockBtn.BackgroundColor3 = Color3.fromRGB(0, 180, 80)
+    else
+        Settings.LockedTarget = nil
+        LockBtn.BackgroundColor3 = Color3.fromRGB(60, 60, 70)
+    end
+end)
+
 --------------------------------------------------------------------------------
 -- AIMBOT LOOP
 --------------------------------------------------------------------------------
 RunService.RenderStepped:Connect(function()
-    local isAiming = Settings.IsRMBDown or Settings.AutoLock0
+    local isAiming = Settings.IsRMBDown or Settings.AutoLock
     if not Settings.Aimbot or not isAiming then return end
     local target = Settings.LockedTarget
     if target and not Settings.Friends[target.UserId]
@@ -1166,10 +1238,7 @@ RunService.RenderStepped:Connect(function()
         if targetPart and IsBulletPathClear(targetPart) then
             Camera.CFrame = CFrame.lookAt(Camera.CFrame.Position, targetPart.Position)
             if Settings.AutoShoot then
-                pcall(function()
-                    mouse1press()
-                    task.delay(0.01, function() mouse1release() end)
-                end)
+                FireWeapon()
             end
         else
             Settings.LockedTarget = GetClosestTargetInFOV()
@@ -1179,4 +1248,4 @@ RunService.RenderStepped:Connect(function()
     end
 end)
 
-print("[Misty_Dany Hub V7] Загружено! Insert - свернуть, Delete - выгрузить, 0 - авто-лок.")
+print("[Misty_Dany Hub V8] Загружено! Тяни за пустое место. Кнопка LOCK - авто-лок для телефона.")

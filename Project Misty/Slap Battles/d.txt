@@ -1,8 +1,7 @@
 --[[
-    Misty_Dany Hub | Blood Zone V8 (Mobile Fixed)
-    - Перетаскивание за любое пустое место
-    - Плавающая кнопка LOCK (авто-лок для телефона)
-    - Авто-стрельба с фолбэком keypress
+    Misty_Dany Hub | Blood Zone V10 (Joystick Fly + Persistent)
+    - Полёт по джойстику телефона (MoveDirection)
+    - Автосохранение всех настроек в файл
     - 6 вкладок: Бой / Движ / Друзья / Фичи / Игрок / Игроки
 --]]
 
@@ -12,17 +11,21 @@ local UserInputService = game:GetService("UserInputService")
 local Workspace = game:GetService("Workspace")
 local SoundService = game:GetService("SoundService")
 local Debris = game:GetService("Debris")
+local HttpService = game:GetService("HttpService")
 
 local LocalPlayer = Players.LocalPlayer
 local Camera = Workspace.CurrentCamera
 
 --------------------------------------------------------------------------------
--- НАСТРОЙКИ
+-- 💾 СИСТЕМА СОХРАНЕНИЯ
 --------------------------------------------------------------------------------
+local CONFIG_FILE = "MistyDany_BloodZone_Config.json"
+
 local Settings = {
     ESP = true, Aimbot = true, AutoShoot = true,
     TargetPart = "Head",
     AutoLock = false,
+    FOVRadius = 40,
     Fly = false, FlySpeed = 55,
     Noclip = false, ClickTP = false,
     FreeCam = false, Crosshair = false,
@@ -30,17 +33,75 @@ local Settings = {
     HitSound = false,
     InfiniteJump = false, JumpPower = 50,
     WalkSpeed = 16,
-    FOVRadius = 40,
+    Friends = {},
+    UIPosition = {0.5, -210, 0.25, -235},
+    UISize = {420, 470},
     LockedTarget = nil, IsRMBDown = false,
-    Friends = {}, UIVisible = true,
+    UIVisible = true,
     SelectedPlayer = nil, Spectating = nil
 }
+
+local RUNTIME_FIELDS = {
+    LockedTarget = true, IsRMBDown = true, UIVisible = true,
+    SelectedPlayer = true, Spectating = true
+}
+
+local hasFileAPI = (writefile and readfile and isfile)
+
+local function SaveConfig()
+    if not hasFileAPI then return end
+    local data = {}
+    for k, v in pairs(Settings) do
+        if not RUNTIME_FIELDS[k] then data[k] = v end
+    end
+    if MainFrame then
+        local p = MainFrame.Position
+        local s = MainFrame.Size
+        data.UIPosition = {p.X.Scale, p.X.Offset, p.Y.Scale, p.Y.Offset}
+        data.UISize = {s.X.Offset, s.Y.Offset}
+    end
+    local ok, encoded = pcall(function() return HttpService:JSONEncode(data) end)
+    if ok then pcall(writefile, CONFIG_FILE, encoded) end
+end
+
+local function LoadConfig()
+    if not hasFileAPI then return end
+    if not isfile(CONFIG_FILE) then return end
+    local ok, content = pcall(readfile, CONFIG_FILE)
+    if not ok or not content or content == "" then return end
+    local decodeOk, data = pcall(function() return HttpService:JSONDecode(content) end)
+    if not decodeOk or type(data) ~= "table" then return end
+    for k, v in pairs(data) do
+        if not RUNTIME_FIELDS[k] and Settings[k] ~= nil then
+            Settings[k] = v
+        end
+    end
+end
+
+LoadConfig()
+
+local saveScheduled = false
+local function RequestSave()
+    if saveScheduled then return end
+    saveScheduled = true
+    task.delay(1, function()
+        saveScheduled = false
+        SaveConfig()
+    end)
+end
+
+task.spawn(function()
+    while true do
+        task.wait(10)
+        SaveConfig()
+    end
+end)
 
 --------------------------------------------------------------------------------
 -- GUI ROOT
 --------------------------------------------------------------------------------
 local ScreenGui = Instance.new("ScreenGui")
-ScreenGui.Name = "MistyDany_BloodZone_V8"
+ScreenGui.Name = "MistyDany_BloodZone_V10"
 ScreenGui.ResetOnSpawn = false
 ScreenGui.IgnoreGuiInset = true
 
@@ -51,7 +112,7 @@ pcall(function()
 end)
 if not ScreenGui.Parent then ScreenGui.Parent = LocalPlayer:WaitForChild("PlayerGui") end
 
--- Плавающая кнопка "M" (открыть/закрыть меню)
+-- Плавающая кнопка "M"
 local ToggleBtn = Instance.new("TextButton")
 ToggleBtn.Size = UDim2.new(0, 46, 0, 46)
 ToggleBtn.Position = UDim2.new(1, -60, 0, 80)
@@ -66,11 +127,11 @@ Instance.new("UICorner", ToggleBtn).CornerRadius = UDim.new(1, 0)
 local ToggleStroke = Instance.new("UIStroke", ToggleBtn)
 ToggleStroke.Color = Color3.fromRGB(255, 255, 255); ToggleStroke.Thickness = 1.5
 
--- Плавающая кнопка "LOCK" (авто-лок для телефона)
+-- Плавающая кнопка "LOCK"
 local LockBtn = Instance.new("TextButton")
 LockBtn.Size = UDim2.new(0, 46, 0, 46)
 LockBtn.Position = UDim2.new(1, -60, 0, 136)
-LockBtn.BackgroundColor3 = Color3.fromRGB(60, 60, 70)
+LockBtn.BackgroundColor3 = Settings.AutoLock and Color3.fromRGB(0, 180, 80) or Color3.fromRGB(60, 60, 70)
 LockBtn.Text = "🔒"
 LockBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
 LockBtn.Font = Enum.Font.GothamBold
@@ -83,8 +144,11 @@ LockStroke.Color = Color3.fromRGB(255, 255, 255); LockStroke.Thickness = 1.5
 
 -- Главное окно
 local MainFrame = Instance.new("Frame")
-MainFrame.Size = UDim2.new(0, 420, 0, 470)
-MainFrame.Position = UDim2.new(0.5, -210, 0.25, -235)
+MainFrame.Size = UDim2.new(0, Settings.UISize[1], 0, Settings.UISize[2])
+MainFrame.Position = UDim2.new(
+    Settings.UIPosition[1], Settings.UIPosition[2],
+    Settings.UIPosition[3], Settings.UIPosition[4]
+)
 MainFrame.BackgroundColor3 = Color3.fromRGB(18, 18, 24)
 MainFrame.BorderSizePixel = 0
 MainFrame.ClipsDescendants = true
@@ -103,7 +167,7 @@ local Title = Instance.new("TextLabel", Header)
 Title.Size = UDim2.new(1, -80, 1, 0)
 Title.Position = UDim2.new(0, 12, 0, 0)
 Title.BackgroundTransparency = 1
-Title.Text = "Misty_Dany Hub | Blood Zone V8"
+Title.Text = "Misty_Dany Hub | Blood Zone V10"
 Title.TextColor3 = Color3.fromRGB(240, 240, 240)
 Title.TextSize = 13
 Title.Font = Enum.Font.GothamBold
@@ -194,7 +258,7 @@ local PlayersTab = CreateTab("Players", "Игроки")
 SwitchTab("Combat")
 
 --------------------------------------------------------------------------------
--- DRAG / RESIZE (перетаскивание за пустое место)
+-- DRAG / RESIZE
 --------------------------------------------------------------------------------
 local function IsPointerOverInteractive(pos)
     local ok, objs = pcall(function()
@@ -225,6 +289,7 @@ local function EnableDrag(header, frame)
         if input.UserInputType == Enum.UserInputType.MouseButton1
         or input.UserInputType == Enum.UserInputType.Touch then
             dragging = false
+            RequestSave()
         end
     end
 
@@ -255,7 +320,10 @@ ResizeBtn.InputBegan:Connect(function(input)
 end)
 ResizeBtn.InputEnded:Connect(function(input)
     if input.UserInputType == Enum.UserInputType.MouseButton1
-       or input.UserInputType == Enum.UserInputType.Touch then resizing = false end
+       or input.UserInputType == Enum.UserInputType.Touch then
+        resizing = false
+        RequestSave()
+    end
 end)
 UserInputService.InputChanged:Connect(function(input)
     if resizing and (input.UserInputType == Enum.UserInputType.MouseMovement
@@ -289,6 +357,7 @@ local function CreateToggle(parent, text, state, callback)
     Btn.MouseButton1Click:Connect(function()
         setState(not state)
         callback(state)
+        RequestSave()
     end)
     return Btn, setState
 end
@@ -335,7 +404,7 @@ local function CreateNumber(parent, text, defaultValue, callback)
     Instance.new("UICorner", box).CornerRadius = UDim.new(0, 4)
     box.FocusLost:Connect(function()
         local n = tonumber(box.Text)
-        if n then callback(n) else box.Text = tostring(defaultValue) end
+        if n then callback(n); RequestSave() else box.Text = tostring(defaultValue) end
     end)
     return box
 end
@@ -355,7 +424,6 @@ local function CreateSlider(parent, text, min, max, defaultValue, callback)
     label.Font = Enum.Font.GothamSemibold
     label.TextSize = 11
     label.TextXAlignment = Enum.TextXAlignment.Left
-    -- Слайдер как TextButton чтобы не тащил окно
     local back = Instance.new("TextButton", frame)
     back.Text = ""
     back.AutoButtonColor = false
@@ -390,7 +458,9 @@ local function CreateSlider(parent, text, min, max, defaultValue, callback)
     end)
     UserInputService.InputEnded:Connect(function(input)
         if input.UserInputType == Enum.UserInputType.MouseButton1
-           or input.UserInputType == Enum.UserInputType.Touch then sliding = false end
+           or input.UserInputType == Enum.UserInputType.Touch then
+            if sliding then sliding = false; RequestSave() end
+        end
     end)
     return frame
 end
@@ -411,6 +481,7 @@ local function CreateCycle(parent, text, options, startIdx, callback)
         idx = idx % #options + 1
         Btn.Text = "  " .. text .. ": " .. options[idx]
         callback(options[idx], idx)
+        RequestSave()
     end)
     return Btn
 end
@@ -422,11 +493,11 @@ CreateToggle(CombatTab, "ESP Подсветка (Highlight)", Settings.ESP, func
 CreateToggle(CombatTab, "Аимбот", Settings.Aimbot, function(v) Settings.Aimbot = v end)
 CreateToggle(CombatTab, "Авто-Стрельба", Settings.AutoShoot, function(v) Settings.AutoShoot = v end)
 
-CreateCycle(CombatTab, "Точка прицела", {"Голова", "Тело"}, 1, function(val)
+CreateCycle(CombatTab, "Точка прицела", {"Голова", "Тело"},
+    Settings.TargetPart == "Head" and 1 or 2, function(val)
     Settings.TargetPart = (val == "Голова") and "Head" or "HumanoidRootPart"
 end)
 
--- Авто-Лок (тумблер) — теперь с синхронизацией с плавающей кнопкой
 local AutoLockToggle, SetAutoLockState
 AutoLockToggle, SetAutoLockState = CreateToggle(CombatTab, "Авто-Лок", Settings.AutoLock, function(v)
     Settings.AutoLock = v
@@ -444,88 +515,93 @@ CreateSlider(CombatTab, "Размер FOV (px)", 10, 300, Settings.FOVRadius, fu
 end)
 
 --------------------------------------------------------------------------------
--- FLY
+-- FLY (по джойстику телефона)
 --------------------------------------------------------------------------------
-local flyBV, flyBG, flyConn
-local FlyInputs = {F=false,B=false,L=false,R=false,U=false,D=false}
+local flyBV, flyConn
+local FlyInputs = {Up = false, Down = false}
 
 local function StartFly()
     local char = LocalPlayer.Character
     if not char then return end
-    local hrp = char:FindFirstChild("HumanoidRootPart")
-    if not hrp then return end
+    local root = char:FindFirstChild("HumanoidRootPart")
+    if not root then return end
+
+    if flyBV then flyBV:Destroy() end
+    if flyConn then flyConn:Disconnect() end
 
     flyBV = Instance.new("BodyVelocity")
-    flyBV.MaxForce = Vector3.new(9e9, 9e9, 9e9)
+    flyBV.MaxForce = Vector3.new(1e8, 1e8, 1e8)
     flyBV.Velocity = Vector3.zero
-    flyBV.Parent = hrp
-
-    flyBG = Instance.new("BodyGyro")
-    flyBG.MaxTorque = Vector3.new(9e9, 9e9, 9e9)
-    flyBG.P = 9e4
-    flyBG.CFrame = hrp.CFrame
-    flyBG.Parent = hrp
+    flyBV.Name = "FlyBV"
+    flyBV.Parent = root
 
     flyConn = RunService.RenderStepped:Connect(function()
-        if not Settings.Fly or not flyBV or not flyBG then return end
+        if not Settings.Fly then return end
         local c = LocalPlayer.Character
         if not c then return end
-        local root = c:FindFirstChild("HumanoidRootPart")
-        if not root then return end
-        local camCF = Camera.CFrame
-        local fwd, right = camCF.LookVector, camCF.RightVector
-        local move = Vector3.zero
-        if UserInputService:IsKeyDown(Enum.KeyCode.W) or FlyInputs.F then move = move + fwd end
-        if UserInputService:IsKeyDown(Enum.KeyCode.S) or FlyInputs.B then move = move - fwd end
-        if UserInputService:IsKeyDown(Enum.KeyCode.D) or FlyInputs.R then move = move + right end
-        if UserInputService:IsKeyDown(Enum.KeyCode.A) or FlyInputs.L then move = move - right end
-        if UserInputService:IsKeyDown(Enum.KeyCode.Space) or FlyInputs.U then move = move + Vector3.new(0,1,0) end
-        if UserInputService:IsKeyDown(Enum.KeyCode.LeftControl) or FlyInputs.D then move = move - Vector3.new(0,1,0) end
-        if move.Magnitude > 0 then move = move.Unit end
-        flyBV.Velocity = move * Settings.FlySpeed
-        flyBG.CFrame = CFrame.new(root.Position, root.Position + fwd)
+        local r = c:FindFirstChild("HumanoidRootPart")
+        local h = c:FindFirstChildOfClass("Humanoid")
+        if not r or not h or not flyBV then return end
+
+        -- Горизонталь: джойстик (телефон) + WASD (ПК) — через MoveDirection
+        local dir = h.MoveDirection
+
+        -- Вертикаль: Space/Ctrl (ПК) или ▲▼ (кнопки на телефоне)
+        local vertical = 0
+        if UserInputService:IsKeyDown(Enum.KeyCode.Space) or FlyInputs.Up then
+            vertical = vertical + 1
+        end
+        if UserInputService:IsKeyDown(Enum.KeyCode.LeftControl) or FlyInputs.Down then
+            vertical = vertical - 1
+        end
+        dir = dir + Vector3.new(0, vertical, 0)
+
+        if dir.Magnitude > 0 then dir = dir.Unit end
+        flyBV.Velocity = dir * Settings.FlySpeed
     end)
 end
 
 local function StopFly()
     if flyBV then flyBV:Destroy() flyBV = nil end
-    if flyBG then flyBG:Destroy() flyBG = nil end
     if flyConn then flyConn:Disconnect() flyConn = nil end
 end
 
+-- Кнопки ▲▼ для мобилы (справа, рядом с прыжком)
 local FlyControls = Instance.new("Frame")
-FlyControls.Size = UDim2.new(0, 210, 0, 210)
-FlyControls.Position = UDim2.new(0, 20, 0.5, -105)
+FlyControls.Size = UDim2.new(0, 60, 0, 130)
+FlyControls.Position = UDim2.new(1, -80, 0.6, 0)
 FlyControls.BackgroundTransparency = 1
 FlyControls.Visible = false
 FlyControls.Parent = ScreenGui
 
 local function MakeFlyBtn(text, pos, key)
     local b = Instance.new("TextButton")
-    b.Size = UDim2.new(0, 58, 0, 58)
+    b.Size = UDim2.new(0, 56, 0, 56)
     b.Position = pos
     b.BackgroundColor3 = Color3.fromRGB(180, 30, 45)
     b.BackgroundTransparency = 0.15
     b.Text = text
     b.TextColor3 = Color3.fromRGB(255, 255, 255)
     b.Font = Enum.Font.GothamBold
-    b.TextSize = 22
+    b.TextSize = 26
     b.AutoButtonColor = false
     b.Parent = FlyControls
     Instance.new("UICorner", b).CornerRadius = UDim.new(1, 0)
-    local function on() FlyInputs[key] = true end
+
+    local function on()  FlyInputs[key] = true  end
     local function off() FlyInputs[key] = false end
+
     b.MouseButton1Down:Connect(on)
     b.MouseButton1Up:Connect(off)
-    b.InputBegan:Connect(function(i) if i.UserInputType == Enum.UserInputType.Touch then on() end end)
-    b.InputEnded:Connect(function(i) if i.UserInputType == Enum.UserInputType.Touch then off() end end)
+    b.InputBegan:Connect(function(i)
+        if i.UserInputType == Enum.UserInputType.Touch then on() end
+    end)
+    b.InputEnded:Connect(function(i)
+        if i.UserInputType == Enum.UserInputType.Touch then off() end
+    end)
 end
-MakeFlyBtn("▲", UDim2.new(0, 76, 0, 0), "F")
-MakeFlyBtn("▼", UDim2.new(0, 76, 0, 152), "B")
-MakeFlyBtn("◄", UDim2.new(0, 0, 0, 76), "L")
-MakeFlyBtn("►", UDim2.new(0, 152, 0, 76), "R")
-MakeFlyBtn("↑", UDim2.new(0, 152, 0, 0), "U")
-MakeFlyBtn("↓", UDim2.new(0, 0, 0, 152), "D")
+MakeFlyBtn("▲", UDim2.new(0, 0, 0, 0),   "Up")
+MakeFlyBtn("▼", UDim2.new(0, 0, 0, 70),  "Down")
 
 --------------------------------------------------------------------------------
 -- NOCLIP
@@ -664,6 +740,7 @@ local function RefreshFriendsList()
                 if Settings.Friends[plr.UserId] then Settings.Friends[plr.UserId] = nil
                 else Settings.Friends[plr.UserId] = true end
                 RefreshFriendsList()
+                RequestSave()
             end)
         end
     end
@@ -679,7 +756,7 @@ local Crosshair = Instance.new("Frame")
 Crosshair.Size = UDim2.new(0, 40, 0, 40)
 Crosshair.Position = UDim2.new(0.5, -20, 0.5, -20)
 Crosshair.BackgroundTransparency = 1
-Crosshair.Visible = false
+Crosshair.Visible = Settings.Crosshair
 Crosshair.Parent = ScreenGui
 for _, d in ipairs({
     {UDim2.new(0, 2, 0, 12), UDim2.new(0.5, -1, 0, 0)},
@@ -801,6 +878,7 @@ CreateAction(PlayerTab, "🔄 Сбросить (16 / 50)", function()
             hum.JumpPower = 50
         end
     end
+    RequestSave()
 end)
 
 RunService.Heartbeat:Connect(function()
@@ -1131,7 +1209,6 @@ function GetClosestTargetInFOV()
     return closest
 end
 
--- Авто-стрельба с фолбэком для мобилы
 local function FireWeapon()
     pcall(function()
         if mouse1press and mouse1release then
@@ -1174,10 +1251,12 @@ local InputConn = UserInputService.InputBegan:Connect(function(input, gpe)
         if SetAutoLockState then SetAutoLockState(Settings.AutoLock) end
         LockBtn.BackgroundColor3 = Settings.AutoLock and Color3.fromRGB(0, 180, 80) or Color3.fromRGB(60, 60, 70)
         if not Settings.AutoLock then Settings.LockedTarget = nil end
+        RequestSave()
     elseif input.KeyCode == Enum.KeyCode.Insert then
         Settings.UIVisible = not Settings.UIVisible
         MainFrame.Visible = Settings.UIVisible
     elseif input.KeyCode == Enum.KeyCode.Delete then
+        SaveConfig()
         StopFly(); StopNoclip(); StopFreeCam()
         FOVCircle:Remove()
         ScreenGui:Destroy()
@@ -1202,7 +1281,6 @@ UserInputService.InputEnded:Connect(function(input)
     end
 end)
 
--- Кнопки на экране
 ToggleBtn.MouseButton1Click:Connect(function()
     Settings.UIVisible = not Settings.UIVisible
     MainFrame.Visible = Settings.UIVisible
@@ -1222,6 +1300,7 @@ LockBtn.MouseButton1Click:Connect(function()
         Settings.LockedTarget = nil
         LockBtn.BackgroundColor3 = Color3.fromRGB(60, 60, 70)
     end
+    RequestSave()
 end)
 
 --------------------------------------------------------------------------------
@@ -1248,4 +1327,4 @@ RunService.RenderStepped:Connect(function()
     end
 end)
 
-print("[Misty_Dany Hub V8] Загружено! Тяни за пустое место. Кнопка LOCK - авто-лок для телефона.")
+print("[Misty_Dany Hub V10] Загружено! Fly - по джойстику, настройки сохраняются.")

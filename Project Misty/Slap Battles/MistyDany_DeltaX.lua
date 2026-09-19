@@ -1,1065 +1,371 @@
 --[[
-    Misty_Dany Hub | Blood Zone V6 (Full Edition)
-    Вкладки: Бой / Движ / Друзья / Фичи / Игрок / Игроки
-    - Fly + настройка скорости полёта, Noclip, Click TP, TP вперёд/вверх, TP к игрокам
-    - FreeCam, Прицел, Авто-спринт, Звук попадания
-    - Игрок: Infinite Jump, Jump Power, Walk Speed, Noclip
-    - Игроки: выбор игрока, слежка, инфо (UserID, HP, дистанция, команда)
-    - Hotkeys: Insert - свернуть, Delete - выгрузить
+╔══════════════════════════════════════════════╗
+║   MISTY · GOD + HITBOX TP                    ║
+║   Бессмертие + телепорт хитбокса             ║
+╚══════════════════════════════════════════════╝
 --]]
 
-local Players = game:GetService("Players")
-local RunService = game:GetService("RunService")
-local UserInputService = game:GetService("UserInputService")
-local Workspace = game:GetService("Workspace")
-local SoundService = game:GetService("SoundService")
-local Debris = game:GetService("Debris")
+local Players      = game:GetService("Players")
+local RunService   = game:GetService("RunService")
+local UIS          = game:GetService("UserInputService")
+local LP           = Players.LocalPlayer
 
-local LocalPlayer = Players.LocalPlayer
-local Camera = Workspace.CurrentCamera
-
---------------------------------------------------------------------------------
--- НАСТРОЙКИ
---------------------------------------------------------------------------------
-local Settings = {
-    ESP = true, Aimbot = true, AutoShoot = true,
-    Fly = false, FlySpeed = 55,
-    Noclip = false, ClickTP = false,
-    FreeCam = false, Crosshair = false,
-    AutoSprint = false, AutoSprintSpeed = 28,
-    HitSound = false,
-    InfiniteJump = false, JumpPower = 50,
-    WalkSpeed = 16,
-    FOVRadius = 40,
-    LockedTarget = nil, IsRMBDown = false,
-    Friends = {}, UIVisible = true,
-    SelectedPlayer = nil, Spectating = nil
+-- ═══════════════════════════════════════════════
+--  НАСТРОЙКИ
+-- ═══════════════════════════════════════════════
+local God = {
+    Enabled       = false,
+    ForceField    = true,
+    HP_Restore    = true,
+    AntiDebuff    = true,
+    AntiRagdoll   = true,
 }
 
---------------------------------------------------------------------------------
--- GUI
---------------------------------------------------------------------------------
+local HitboxTP = {
+    Enabled       = false,
+    Offset        = Vector3.new(0, 1e9, 0),  -- 1 миллиард studs вверх
+    KeepToolInPlace = true,                   -- Handle инструмента остаётся на месте
+    OriginalHRP   = nil,
+    OriginalToolCF = nil,
+}
+
+-- ═══════════════════════════════════════════════
+--  GOD MODE
+-- ═══════════════════════════════════════════════
+local godConns = {}
+local lastHP = nil
+
+local DEBUFFS = {
+    "Plague", "Infected", "Burn", "Burning", "Frozen", "Freeze",
+    "Stun", "Stunned", "Slow", "Slowed", "Poison", "Poisoned",
+    "Bleeding", "Ragdolled", "Ragdoll",
+}
+
+local function ClearGodConns()
+    for _, c in ipairs(godConns) do
+        pcall(function() c:Disconnect() end)
+    end
+    godConns = {}
+end
+
+local function GetChar() return LP.Character end
+local function GetHum()
+    local c = GetChar()
+    return c and c:FindFirstChildOfClass("Humanoid")
+end
+
+local function EnableGod(char)
+    if not char then return end
+    local hum = char:FindFirstChildOfClass("Humanoid")
+    if not hum then return end
+    lastHP = hum.Health
+
+    -- ForceField
+    if God.ForceField and not char:FindFirstChildOfClass("ForceField") then
+        local ff = Instance.new("ForceField")
+        ff.Visible = false
+        ff.Parent = char
+    end
+
+    -- HP restore
+    if God.HP_Restore then
+        table.insert(godConns, hum.HealthChanged:Connect(function(hp)
+            if not God.Enabled then return end
+            if hp < lastHP then
+                hum.Health = hum.MaxHealth
+            end
+            lastHP = hum.Health
+        end))
+    end
+
+    -- Anti-debuff loop
+    if God.AntiDebuff then
+        table.insert(godConns, RunService.Heartbeat:Connect(function()
+            if not God.Enabled then return end
+            local c = GetChar()
+            if not c then return end
+            for _, name in ipairs(DEBUFFS) do
+                local d = c:FindFirstChild(name)
+                if d then
+                    if d:IsA("BoolValue") then
+                        d.Value = false
+                    else
+                        pcall(function() d:Destroy() end)
+                    end
+                end
+            end
+            if God.ForceField and not c:FindFirstChildOfClass("ForceField") then
+                local ff = Instance.new("ForceField")
+                ff.Visible = false
+                ff.Parent = c
+            end
+        end))
+    end
+
+    -- Anti-ragdoll
+    if God.AntiRagdoll then
+        table.insert(godConns, RunService.Heartbeat:Connect(function()
+            if not God.Enabled then return end
+            local c = GetChar()
+            if not c then return end
+            local h = c:FindFirstChildOfClass("Humanoid")
+            if not h then return end
+            for _, d in ipairs(c:GetDescendants()) do
+                if d:IsA("BallSocketConstraint") or d:IsA("HingeConstraint") then
+                    if d.Enabled then d.Enabled = false end
+                end
+            end
+            local state = h:GetState()
+            if state == Enum.HumanoidStateType.Ragdoll
+            or state == Enum.HumanoidStateType.FallingDown then
+                h.PlatformStand = false
+                h:ChangeState(Enum.HumanoidStateType.GettingUp)
+            end
+            local rag = c:FindFirstChild("Ragdolled")
+            if rag and rag:IsA("BoolValue") and rag.Value then
+                rag.Value = false
+            end
+        end))
+    end
+end
+
+local function DisableGod()
+    ClearGodConns()
+    local char = GetChar()
+    if char then
+        for _, ff in ipairs(char:GetChildren()) do
+            if ff:IsA("ForceField") then pcall(function() ff:Destroy() end) end
+        end
+        for _, d in ipairs(char:GetDescendants()) do
+            if d:IsA("BallSocketConstraint") or d:IsA("HingeConstraint") then
+                d.Enabled = true
+            end
+        end
+    end
+end
+
+-- ═══════════════════════════════════════════════
+--  HITBOX TP (хитбокс вверх, Handle на месте)
+-- ═══════════════════════════════════════════════
+local hitboxConn = nil
+local origHRP = nil
+local origHandleCF = nil
+local origBodyParts = {}  -- { [part] = {cframe=..., anchored=..., canCollide=...} }
+
+local function EnableHitboxTP()
+    local char = GetChar()
+    if not char then return end
+    local hrp = char:FindFirstChild("HumanoidRootPart")
+    if not hrp then return end
+
+    -- Запоминаем оригинальные позиции
+    origHRP = hrp.CFrame
+
+    -- Запоминаем Handle инструмента (если экипирован)
+    local tool = char:FindFirstChildOfClass("Tool")
+    if tool then
+        local handle = tool:FindFirstChild("Handle")
+        if handle then
+            origHandleCF = handle.CFrame
+        end
+    end
+
+    -- Запоминаем все части тела (для восстановления)
+    origBodyParts = {}
+    for _, part in ipairs(char:GetDescendants()) do
+        if part:IsA("BasePart") then
+            origBodyParts[part] = {
+                anchored = part.Anchored,
+                canCollide = part.CanCollide,
+                cframe = part.CFrame,
+            }
+        end
+    end
+
+    -- Цикл: каждый кадр гоним HRP вверх, но Handle возвращаем назад
+    if hitboxConn then hitboxConn:Disconnect() end
+    hitboxConn = RunService.RenderStepped:Connect(function()
+        if not HitboxTP.Enabled then return end
+        local c = GetChar()
+        if not c then return end
+
+        local r = c:FindFirstChild("HumanoidRootPart")
+        if not r or not origHRP then return end
+
+        -- 1. ТЕЛЕПОРТ ХИТБОКСА (HRP) — на 1e9 studs вверх
+        r.CFrame = origHRP + HitboxTP.Offset
+
+        -- 2. Гасим скорость чтобы физика не дёргала
+        pcall(function()
+            r.AssemblyLinearVelocity = Vector3.zero
+            r.AssemblyAngularVelocity = Vector3.zero
+        end)
+
+        -- 3. Остальные части тела следуют за HRP через weld
+        --    (ничего делать не надо, они welded)
+
+        -- 4. HANDLE ИНСТРУМЕНТА — оставляем на месте
+        if HitboxTP.KeepToolInPlace then
+            local tool = c:FindFirstChildOfClass("Tool")
+            if tool then
+                local handle = tool:FindFirstChild("Handle")
+                if handle then
+                    if not origHandleCF then
+                        origHandleCF = handle.CFrame
+                    end
+                    -- Жёстко ставим Handle на оригинальную позицию
+                    handle.CFrame = origHandleCF
+                    -- Гасим Handle физику
+                    pcall(function()
+                        handle.AssemblyLinearVelocity = Vector3.zero
+                        handle.AssemblyAngularVelocity = Vector3.zero
+                    end)
+                end
+            end
+        end
+    end)
+end
+
+local function DisableHitboxTP()
+    if hitboxConn then hitboxConn:Disconnect(); hitboxConn = nil end
+
+    -- Восстанавливаем части
+    local char = GetChar()
+    if char then
+        for part, data in pairs(origBodyParts) do
+            if part and part.Parent then
+                pcall(function()
+                    part.CFrame = data.cframe
+                    part.Anchored = data.anchored
+                    part.CanCollide = data.canCollide
+                end)
+            end
+        end
+    end
+
+    origHRP = nil
+    origHandleCF = nil
+    origBodyParts = {}
+end
+
+-- ═══════════════════════════════════════════════
+--  Перезапуск при респавне
+-- ═══════════════════════════════════════════════
+LP.CharacterAdded:Connect(function()
+    task.wait(0.5)
+    if God.Enabled then
+        ClearGodConns()
+        EnableGod(LP.Character)
+    end
+    if HitboxTP.Enabled then
+        -- Перезапускаем заново с новыми позициями
+        DisableHitboxTP()
+        task.wait(0.2)
+        EnableHitboxTP()
+    end
+end)
+
+-- ═══════════════════════════════════════════════
+--  UI
+-- ═══════════════════════════════════════════════
 local ScreenGui = Instance.new("ScreenGui")
-ScreenGui.Name = "MistyDany_BloodZone_V6"
+ScreenGui.Name = "MistyGodHitbox"
 ScreenGui.ResetOnSpawn = false
 ScreenGui.IgnoreGuiInset = true
-
 pcall(function()
     if gethui then ScreenGui.Parent = gethui()
     elseif syn and syn.protect_gui then syn.protect_gui(ScreenGui); ScreenGui.Parent = game:GetService("CoreGui")
     else ScreenGui.Parent = game:GetService("CoreGui") end
 end)
-if not ScreenGui.Parent then ScreenGui.Parent = LocalPlayer:WaitForChild("PlayerGui") end
-
--- Плавающая кнопка
-local ToggleBtn = Instance.new("TextButton")
-ToggleBtn.Size = UDim2.new(0, 46, 0, 46)
-ToggleBtn.Position = UDim2.new(1, -60, 0, 80)
-ToggleBtn.BackgroundColor3 = Color3.fromRGB(180, 30, 45)
-ToggleBtn.Text = "M"
-ToggleBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
-ToggleBtn.Font = Enum.Font.GothamBold
-ToggleBtn.TextSize = 20
-ToggleBtn.AutoButtonColor = false
-ToggleBtn.Parent = ScreenGui
-Instance.new("UICorner", ToggleBtn).CornerRadius = UDim.new(1, 0)
-local ToggleStroke = Instance.new("UIStroke", ToggleBtn)
-ToggleStroke.Color = Color3.fromRGB(255, 255, 255); ToggleStroke.Thickness = 1.5
-
--- Главное окно
-local MainFrame = Instance.new("Frame")
-MainFrame.Size = UDim2.new(0, 400, 0, 440)
-MainFrame.Position = UDim2.new(0.5, -200, 0.25, -220)
-MainFrame.BackgroundColor3 = Color3.fromRGB(18, 18, 24)
-MainFrame.BorderSizePixel = 0
-MainFrame.ClipsDescendants = true
-MainFrame.Parent = ScreenGui
-Instance.new("UICorner", MainFrame).CornerRadius = UDim.new(0, 8)
-local MainStroke = Instance.new("UIStroke", MainFrame)
-MainStroke.Color = Color3.fromRGB(220, 35, 55); MainStroke.Thickness = 2
-
-local Header = Instance.new("Frame", MainFrame)
-Header.Size = UDim2.new(1, 0, 0, 36)
-Header.BackgroundColor3 = Color3.fromRGB(28, 28, 36)
-Header.BorderSizePixel = 0
-Instance.new("UICorner", Header).CornerRadius = UDim.new(0, 8)
-
-local Title = Instance.new("TextLabel", Header)
-Title.Size = UDim2.new(1, -80, 1, 0)
-Title.Position = UDim2.new(0, 12, 0, 0)
-Title.BackgroundTransparency = 1
-Title.Text = "Misty_Dany Hub | Blood Zone V6"
-Title.TextColor3 = Color3.fromRGB(240, 240, 240)
-Title.TextSize = 13
-Title.Font = Enum.Font.GothamBold
-Title.TextXAlignment = Enum.TextXAlignment.Left
-
-local CloseBtn = Instance.new("TextButton", Header)
-CloseBtn.Size = UDim2.new(0, 26, 0, 26)
-CloseBtn.Position = UDim2.new(1, -32, 0.5, -13)
-CloseBtn.BackgroundColor3 = Color3.fromRGB(50, 50, 60)
-CloseBtn.Text = "X"
-CloseBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
-CloseBtn.Font = Enum.Font.GothamBold
-CloseBtn.TextSize = 13
-CloseBtn.AutoButtonColor = false
-Instance.new("UICorner", CloseBtn).CornerRadius = UDim.new(0, 6)
-
-local ResizeBtn = Instance.new("TextButton", MainFrame)
-ResizeBtn.Size = UDim2.new(0, 18, 0, 18)
-ResizeBtn.Position = UDim2.new(1, -18, 1, -18)
-ResizeBtn.BackgroundTransparency = 1
-ResizeBtn.Text = "◢"
-ResizeBtn.TextColor3 = Color3.fromRGB(220, 35, 55)
-ResizeBtn.TextSize = 14
-ResizeBtn.Font = Enum.Font.GothamBold
-
--- Tab bar
-local TabBar = Instance.new("Frame", MainFrame)
-TabBar.Size = UDim2.new(1, -20, 0, 30)
-TabBar.Position = UDim2.new(0, 10, 0, 42)
-TabBar.BackgroundTransparency = 1
-local TabLayout = Instance.new("UIListLayout", TabBar)
-TabLayout.FillDirection = Enum.FillDirection.Horizontal
-TabLayout.Padding = UDim.new(0, 4)
-TabLayout.SortOrder = Enum.SortOrder.LayoutOrder
-
-local Content = Instance.new("Frame", MainFrame)
-Content.Size = UDim2.new(1, -20, 1, -86)
-Content.Position = UDim2.new(0, 10, 0, 78)
-Content.BackgroundTransparency = 1
-Content.ClipsDescendants = true
-
-local Tabs, TabButtons = {}, {}
-local CurrentTab
-
-local function SwitchTab(name)
-    for n, f in pairs(Tabs) do f.Visible = (n == name) end
-    for n, b in pairs(TabButtons) do
-        b.BackgroundColor3 = (n == name) and Color3.fromRGB(180, 30, 45) or Color3.fromRGB(32, 32, 42)
-    end
-    CurrentTab = name
-end
-
-local function CreateTab(name, label)
-    local btn = Instance.new("TextButton", TabBar)
-    btn.Size = UDim2.new(0, 58, 1, 0)
-    btn.BackgroundColor3 = Color3.fromRGB(32, 32, 42)
-    btn.Text = label
-    btn.TextColor3 = Color3.fromRGB(255, 255, 255)
-    btn.Font = Enum.Font.GothamSemibold
-    btn.TextSize = 11
-    btn.AutoButtonColor = false
-    Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 6)
-    btn.MouseButton1Click:Connect(function() SwitchTab(name) end)
-    TabButtons[name] = btn
-
-    local frame = Instance.new("ScrollingFrame", Content)
-    frame.Size = UDim2.new(1, 0, 1, 0)
-    frame.BackgroundTransparency = 1
-    frame.BorderSizePixel = 0
-    frame.ScrollBarThickness = 4
-    frame.CanvasSize = UDim2.new(0, 0, 0, 0)
-    frame.Visible = false
-    local list = Instance.new("UIListLayout", frame)
-    list.Padding = UDim.new(0, 8)
-    list.SortOrder = Enum.SortOrder.LayoutOrder
-    list:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
-        frame.CanvasSize = UDim2.new(0, 0, 0, list.AbsoluteContentSize.Y + 8)
-    end)
-    Tabs[name] = frame
-    return frame
-end
-
-local CombatTab  = CreateTab("Combat",  "Бой")
-local MoveTab    = CreateTab("Move",    "Движ")
-local FriendsTab = CreateTab("Friends", "Друзья")
-local FeatTab    = CreateTab("Feature", "Фичи")
-local PlayerTab  = CreateTab("Player",  "Игрок")
-local PlayersTab = CreateTab("Players", "Игроки")
-SwitchTab("Combat")
-
---------------------------------------------------------------------------------
--- ПЕРЕТАСКИВАНИЕ / РЕСАЙЗ
---------------------------------------------------------------------------------
-local function EnableDrag(header, frame)
-    local dragging, dragStart, startPos
-    header.InputBegan:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.MouseButton1
-           or input.UserInputType == Enum.UserInputType.Touch then
-            dragging = true; dragStart = input.Position; startPos = frame.Position
-        end
-    end)
-    header.InputEnded:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.MouseButton1
-           or input.UserInputType == Enum.UserInputType.Touch then dragging = false end
-    end)
-    UserInputService.InputChanged:Connect(function(input)
-        if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement
-           or input.UserInputType == Enum.UserInputType.Touch) then
-            local d = input.Position - dragStart
-            frame.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + d.X,
-                                        startPos.Y.Scale, startPos.Y.Offset + d.Y)
-        end
-    end)
-end
-EnableDrag(Header, MainFrame)
-
-local resizing, resizeStart, startSize
-ResizeBtn.InputBegan:Connect(function(input)
-    if input.UserInputType == Enum.UserInputType.MouseButton1
-       or input.UserInputType == Enum.UserInputType.Touch then
-        resizing = true; resizeStart = input.Position; startSize = MainFrame.Size
-    end
-end)
-ResizeBtn.InputEnded:Connect(function(input)
-    if input.UserInputType == Enum.UserInputType.MouseButton1
-       or input.UserInputType == Enum.UserInputType.Touch then resizing = false end
-end)
-UserInputService.InputChanged:Connect(function(input)
-    if resizing and (input.UserInputType == Enum.UserInputType.MouseMovement
-       or input.UserInputType == Enum.UserInputType.Touch) then
-        local d = input.Position - resizeStart
-        MainFrame.Size = UDim2.new(0, math.max(380, startSize.X.Offset + d.X),
-                                    0, math.max(300, startSize.Y.Offset + d.Y))
-    end
-end)
-
---------------------------------------------------------------------------------
--- UI HELPERS
---------------------------------------------------------------------------------
-local function CreateToggle(parent, text, state, callback)
-    local Btn = Instance.new("TextButton", parent)
-    Btn.Size = UDim2.new(1, -8, 0, 36)
-    Btn.BackgroundColor3 = state and Color3.fromRGB(180, 30, 45) or Color3.fromRGB(32, 32, 42)
-    Btn.Text = "  " .. text .. ": " .. (state and "ON" or "OFF")
-    Btn.TextColor3 = Color3.fromRGB(255, 255, 255)
-    Btn.Font = Enum.Font.GothamSemibold
-    Btn.TextSize = 13
-    Btn.TextXAlignment = Enum.TextXAlignment.Left
-    Btn.AutoButtonColor = false
-    Instance.new("UICorner", Btn).CornerRadius = UDim.new(0, 6)
-    Btn.MouseButton1Click:Connect(function()
-        state = not state
-        Btn.BackgroundColor3 = state and Color3.fromRGB(180, 30, 45) or Color3.fromRGB(32, 32, 42)
-        Btn.Text = "  " .. text .. ": " .. (state and "ON" or "OFF")
-        callback(state)
-    end)
-    return Btn
-end
-
-local function CreateAction(parent, text, callback)
-    local Btn = Instance.new("TextButton", parent)
-    Btn.Size = UDim2.new(1, -8, 0, 36)
-    Btn.BackgroundColor3 = Color3.fromRGB(60, 60, 75)
-    Btn.Text = "  " .. text
-    Btn.TextColor3 = Color3.fromRGB(255, 255, 255)
-    Btn.Font = Enum.Font.GothamSemibold
-    Btn.TextSize = 13
-    Btn.TextXAlignment = Enum.TextXAlignment.Left
-    Btn.AutoButtonColor = false
-    Instance.new("UICorner", Btn).CornerRadius = UDim.new(0, 6)
-    Btn.MouseButton1Click:Connect(callback)
-    return Btn
-end
-
-local function CreateNumber(parent, text, defaultValue, callback)
-    local c = Instance.new("Frame", parent)
-    c.Size = UDim2.new(1, -8, 0, 36)
-    c.BackgroundColor3 = Color3.fromRGB(28, 28, 36)
-    c.BorderSizePixel = 0
-    Instance.new("UICorner", c).CornerRadius = UDim.new(0, 6)
-
-    local lbl = Instance.new("TextLabel", c)
-    lbl.Size = UDim2.new(0.55, 0, 1, 0)
-    lbl.Position = UDim2.new(0, 10, 0, 0)
-    lbl.BackgroundTransparency = 1
-    lbl.Text = text
-    lbl.TextColor3 = Color3.fromRGB(230, 230, 230)
-    lbl.Font = Enum.Font.GothamSemibold
-    lbl.TextSize = 12
-    lbl.TextXAlignment = Enum.TextXAlignment.Left
-
-    local box = Instance.new("TextBox", c)
-    box.Size = UDim2.new(0.38, -6, 0, 24)
-    box.Position = UDim2.new(0.60, 0, 0.5, -12)
-    box.BackgroundColor3 = Color3.fromRGB(48, 48, 60)
-    box.Text = tostring(defaultValue)
-    box.TextColor3 = Color3.fromRGB(255, 255, 255)
-    box.Font = Enum.Font.Gotham
-    box.TextSize = 12
-    box.ClearTextOnFocus = false
-    box.TextScaled = false
-    Instance.new("UICorner", box).CornerRadius = UDim.new(0, 4)
-
-    box.FocusLost:Connect(function()
-        local n = tonumber(box.Text)
-        if n then callback(n) else box.Text = tostring(defaultValue) end
-    end)
-    return box
-end
-
---------------------------------------------------------------------------------
--- ВКЛАДКА БОЙ
---------------------------------------------------------------------------------
-CreateToggle(CombatTab, "ESP Подсветка", Settings.ESP, function(v) Settings.ESP = v end)
-CreateToggle(CombatTab, "Аимбот в Голову", Settings.Aimbot, function(v) Settings.Aimbot = v end)
-CreateToggle(CombatTab, "Авто-Стрельба", Settings.AutoShoot, function(v) Settings.AutoShoot = v end)
-
---------------------------------------------------------------------------------
--- FLY
---------------------------------------------------------------------------------
-local flyBV, flyBG, flyConn
-local FlyInputs = {F=false,B=false,L=false,R=false,U=false,D=false}
-
-local function StartFly()
-    local char = LocalPlayer.Character
-    if not char then return end
-    local hrp = char:FindFirstChild("HumanoidRootPart")
-    if not hrp then return end
-
-    flyBV = Instance.new("BodyVelocity")
-    flyBV.MaxForce = Vector3.new(9e9, 9e9, 9e9)
-    flyBV.Velocity = Vector3.zero
-    flyBV.Parent = hrp
-
-    flyBG = Instance.new("BodyGyro")
-    flyBG.MaxTorque = Vector3.new(9e9, 9e9, 9e9)
-    flyBG.P = 9e4
-    flyBG.CFrame = hrp.CFrame
-    flyBG.Parent = hrp
-
-    flyConn = RunService.RenderStepped:Connect(function()
-        if not Settings.Fly or not flyBV or not flyBG then return end
-        local c = LocalPlayer.Character
-        if not c then return end
-        local root = c:FindFirstChild("HumanoidRootPart")
-        if not root then return end
-
-        local camCF = Camera.CFrame
-        local fwd, right = camCF.LookVector, camCF.RightVector
-        local move = Vector3.zero
-
-        if UserInputService:IsKeyDown(Enum.KeyCode.W) or FlyInputs.F then move = move + fwd end
-        if UserInputService:IsKeyDown(Enum.KeyCode.S) or FlyInputs.B then move = move - fwd end
-        if UserInputService:IsKeyDown(Enum.KeyCode.D) or FlyInputs.R then move = move + right end
-        if UserInputService:IsKeyDown(Enum.KeyCode.A) or FlyInputs.L then move = move - right end
-        if UserInputService:IsKeyDown(Enum.KeyCode.Space) or FlyInputs.U then move = move + Vector3.new(0,1,0) end
-        if UserInputService:IsKeyDown(Enum.KeyCode.LeftControl) or FlyInputs.D then move = move - Vector3.new(0,1,0) end
-
-        if move.Magnitude > 0 then move = move.Unit end
-        flyBV.Velocity = move * Settings.FlySpeed
-        flyBG.CFrame = CFrame.new(root.Position, root.Position + fwd)
-    end)
-end
-
-local function StopFly()
-    if flyBV then flyBV:Destroy() flyBV = nil end
-    if flyBG then flyBG:Destroy() flyBG = nil end
-    if flyConn then flyConn:Disconnect() flyConn = nil end
-end
-
-local FlyControls = Instance.new("Frame")
-FlyControls.Size = UDim2.new(0, 210, 0, 210)
-FlyControls.Position = UDim2.new(0, 20, 0.5, -105)
-FlyControls.BackgroundTransparency = 1
-FlyControls.Visible = false
-FlyControls.Parent = ScreenGui
-
-local function MakeFlyBtn(text, pos, key)
-    local b = Instance.new("TextButton")
-    b.Size = UDim2.new(0, 58, 0, 58)
-    b.Position = pos
-    b.BackgroundColor3 = Color3.fromRGB(180, 30, 45)
-    b.BackgroundTransparency = 0.15
-    b.Text = text
-    b.TextColor3 = Color3.fromRGB(255, 255, 255)
-    b.Font = Enum.Font.GothamBold
-    b.TextSize = 22
-    b.AutoButtonColor = false
-    b.Parent = FlyControls
-    Instance.new("UICorner", b).CornerRadius = UDim.new(1, 0)
-    local function on() FlyInputs[key] = true end
-    local function off() FlyInputs[key] = false end
-    b.MouseButton1Down:Connect(on)
-    b.MouseButton1Up:Connect(off)
-    b.InputBegan:Connect(function(i) if i.UserInputType == Enum.UserInputType.Touch then on() end end)
-    b.InputEnded:Connect(function(i) if i.UserInputType == Enum.UserInputType.Touch then off() end end)
-end
-
-MakeFlyBtn("▲", UDim2.new(0, 76, 0, 0), "F")
-MakeFlyBtn("▼", UDim2.new(0, 76, 0, 152), "B")
-MakeFlyBtn("◄", UDim2.new(0, 0, 0, 76), "L")
-MakeFlyBtn("►", UDim2.new(0, 152, 0, 76), "R")
-MakeFlyBtn("↑", UDim2.new(0, 152, 0, 0), "U")
-MakeFlyBtn("↓", UDim2.new(0, 0, 0, 152), "D")
-
---------------------------------------------------------------------------------
--- NOCLIP
---------------------------------------------------------------------------------
-local noclipConn
-local function StartNoclip()
-    if noclipConn then return end
-    noclipConn = RunService.Stepped:Connect(function()
-        local char = LocalPlayer.Character
-        if not char then return end
-        for _, part in ipairs(char:GetDescendants()) do
-            if part:IsA("BasePart") and part.CanCollide then part.CanCollide = false end
-        end
-    end)
-end
-local function StopNoclip()
-    if noclipConn then noclipConn:Disconnect() noclipConn = nil end
-end
-
---------------------------------------------------------------------------------
--- ВКЛАДКА ДВИЖ
---------------------------------------------------------------------------------
-CreateToggle(MoveTab, "Fly (Полёт)", Settings.Fly, function(v)
-    Settings.Fly = v
-    FlyControls.Visible = v
-    if v then StartFly() else StopFly() end
-end)
-
-CreateNumber(MoveTab, "Скорость полёта", Settings.FlySpeed, function(n)
-    Settings.FlySpeed = math.clamp(n, 5, 500)
-end)
-
-CreateAction(MoveTab, "➡ TP вперёд (30 studs)", function()
-    local char = LocalPlayer.Character
-    if not char then return end
-    local hrp = char:FindFirstChild("HumanoidRootPart")
-    if not hrp then return end
-    hrp.CFrame = CFrame.new(hrp.Position + Camera.CFrame.LookVector * 30)
-end)
-
-CreateAction(MoveTab, "⬆ TP вверх (15 studs)", function()
-    local char = LocalPlayer.Character
-    if not char then return end
-    local hrp = char:FindFirstChild("HumanoidRootPart")
-    if not hrp then return end
-    hrp.CFrame = hrp.CFrame + Vector3.new(0, 15, 0)
-end)
-
-CreateToggle(MoveTab, "Click TP (телепорт по клику)", Settings.ClickTP, function(v)
-    Settings.ClickTP = v
-end)
-
--- Список ТП к игрокам
-local TPScroll = Instance.new("ScrollingFrame", MoveTab)
-TPScroll.Size = UDim2.new(1, -8, 0, 160)
-TPScroll.BackgroundColor3 = Color3.fromRGB(22, 22, 30)
-TPScroll.BorderSizePixel = 0
-TPScroll.ScrollBarThickness = 4
-TPScroll.CanvasSize = UDim2.new(0, 0, 0, 0)
-Instance.new("UICorner", TPScroll).CornerRadius = UDim.new(0, 6)
-local TPList = Instance.new("UIListLayout", TPScroll)
-TPList.Padding = UDim.new(0, 4)
-
-local function RefreshTPList()
-    for _, c in ipairs(TPScroll:GetChildren()) do
-        if c:IsA("TextButton") then c:Destroy() end
-    end
-    for _, plr in ipairs(Players:GetPlayers()) do
-        if plr ~= LocalPlayer then
-            local b = Instance.new("TextButton", TPScroll)
-            b.Size = UDim2.new(1, -8, 0, 28)
-            b.BackgroundColor3 = Color3.fromRGB(40, 40, 52)
-            b.Text = "  TP → " .. plr.DisplayName
-            b.TextColor3 = Color3.fromRGB(230, 230, 230)
-            b.Font = Enum.Font.GothamSemibold
-            b.TextSize = 12
-            b.TextXAlignment = Enum.TextXAlignment.Left
-            b.AutoButtonColor = false
-            Instance.new("UICorner", b).CornerRadius = UDim.new(0, 4)
-            b.MouseButton1Click:Connect(function()
-                local char, tChar = LocalPlayer.Character, plr.Character
-                if not char or not tChar then return end
-                local hrp = char:FindFirstChild("HumanoidRootPart")
-                local tHrp = tChar:FindFirstChild("HumanoidRootPart")
-                if hrp and tHrp then hrp.CFrame = tHrp.CFrame * CFrame.new(0, 0, -3) end
-            end)
-        end
-    end
-    TPScroll.CanvasSize = UDim2.new(0, 0, 0, TPList.AbsoluteContentSize.Y + 8)
-end
-Players.PlayerAdded:Connect(RefreshTPList)
-Players.PlayerRemoving:Connect(RefreshTPList)
-task.spawn(RefreshTPList)
-
---------------------------------------------------------------------------------
--- ВКЛАДКА ДРУЗЬЯ
---------------------------------------------------------------------------------
-local FriendsScroll = Instance.new("ScrollingFrame", FriendsTab)
-FriendsScroll.Size = UDim2.new(1, -8, 1, -8)
-FriendsScroll.BackgroundTransparency = 1
-FriendsScroll.BorderSizePixel = 0
-FriendsScroll.ScrollBarThickness = 4
-local FriendsList = Instance.new("UIListLayout", FriendsScroll)
-FriendsList.Padding = UDim.new(0, 6)
-FriendsList:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
-    FriendsScroll.CanvasSize = UDim2.new(0, 0, 0, FriendsList.AbsoluteContentSize.Y + 10)
-end)
-
-local function RefreshFriendsList()
-    for _, c in ipairs(FriendsScroll:GetChildren()) do
-        if c:IsA("Frame") then c:Destroy() end
-    end
-    for _, plr in ipairs(Players:GetPlayers()) do
-        if plr ~= LocalPlayer then
-            local item = Instance.new("Frame", FriendsScroll)
-            item.Size = UDim2.new(1, -8, 0, 32)
-            item.BackgroundColor3 = Color3.fromRGB(28, 28, 36)
-            item.BorderSizePixel = 0
-            Instance.new("UICorner", item).CornerRadius = UDim.new(0, 6)
-
-            local nm = Instance.new("TextLabel", item)
-            nm.Size = UDim2.new(1, -75, 1, 0)
-            nm.Position = UDim2.new(0, 8, 0, 0)
-            nm.BackgroundTransparency = 1
-            nm.Text = plr.DisplayName .. " (@" .. plr.Name .. ")"
-            nm.TextColor3 = Settings.Friends[plr.UserId] and Color3.fromRGB(0, 255, 120) or Color3.fromRGB(200, 200, 200)
-            nm.TextSize = 11
-            nm.Font = Enum.Font.GothamSemibold
-            nm.TextXAlignment = Enum.TextXAlignment.Left
-            nm.TextTruncate = Enum.TextTruncate.AtEnd
-
-            local fb = Instance.new("TextButton", item)
-            fb.Size = UDim2.new(0, 60, 0, 22)
-            fb.Position = UDim2.new(1, -64, 0.5, -11)
-            fb.BackgroundColor3 = Settings.Friends[plr.UserId] and Color3.fromRGB(0, 180, 80) or Color3.fromRGB(50, 50, 60)
-            fb.Text = Settings.Friends[plr.UserId] and "Friend" or "Add"
-            fb.TextColor3 = Color3.fromRGB(255, 255, 255)
-            fb.Font = Enum.Font.GothamBold
-            fb.TextSize = 10
-            fb.AutoButtonColor = false
-            Instance.new("UICorner", fb).CornerRadius = UDim.new(0, 4)
-            fb.MouseButton1Click:Connect(function()
-                if Settings.Friends[plr.UserId] then Settings.Friends[plr.UserId] = nil
-                else Settings.Friends[plr.UserId] = true end
-                RefreshFriendsList()
-            end)
-        end
-    end
-end
-Players.PlayerAdded:Connect(RefreshFriendsList)
-Players.PlayerRemoving:Connect(RefreshFriendsList)
-task.spawn(RefreshFriendsList)
-
---------------------------------------------------------------------------------
--- ПРИЦЕЛ
---------------------------------------------------------------------------------
-local Crosshair = Instance.new("Frame")
-Crosshair.Size = UDim2.new(0, 40, 0, 40)
-Crosshair.Position = UDim2.new(0.5, -20, 0.5, -20)
-Crosshair.BackgroundTransparency = 1
-Crosshair.Visible = false
-Crosshair.Parent = ScreenGui
-
-local crossParts = {
-    {UDim2.new(0, 2, 0, 12), UDim2.new(0.5, -1, 0, 0)},
-    {UDim2.new(0, 2, 0, 12), UDim2.new(0.5, -1, 1, -12)},
-    {UDim2.new(0, 12, 0, 2), UDim2.new(0, 0, 0.5, -1)},
-    {UDim2.new(0, 12, 0, 2), UDim2.new(1, -12, 0.5, -1)},
-}
-for _, d in ipairs(crossParts) do
-    local l = Instance.new("Frame", Crosshair)
-    l.Size = d[1]; l.Position = d[2]
-    l.BackgroundColor3 = Color3.fromRGB(0, 255, 100)
-    l.BorderSizePixel = 0
-end
-
---------------------------------------------------------------------------------
--- FREECAM
---------------------------------------------------------------------------------
-local freeCamConn
-local function StartFreeCam()
-    Camera.CameraType = Enum.CameraType.Scriptable
-    freeCamConn = RunService.RenderStepped:Connect(function()
-        if not Settings.FreeCam then return end
-        local camCF = Camera.CFrame
-        local move = Vector3.zero
-        if UserInputService:IsKeyDown(Enum.KeyCode.W) then move = move + camCF.LookVector end
-        if UserInputService:IsKeyDown(Enum.KeyCode.S) then move = move - camCF.LookVector end
-        if UserInputService:IsKeyDown(Enum.KeyCode.D) then move = move + camCF.RightVector end
-        if UserInputService:IsKeyDown(Enum.KeyCode.A) then move = move - camCF.RightVector end
-        if UserInputService:IsKeyDown(Enum.KeyCode.Space) then move = move + Vector3.new(0,1,0) end
-        if UserInputService:IsKeyDown(Enum.KeyCode.LeftControl) then move = move - Vector3.new(0,1,0) end
-        if move.Magnitude > 0 then Camera.CFrame = camCF + move.Unit end
-    end)
-end
-local function StopFreeCam()
-    if freeCamConn then freeCamConn:Disconnect() freeCamConn = nil end
-    Camera.CameraType = Enum.CameraType.Custom
-    local char = LocalPlayer.Character
-    if char and char:FindFirstChild("Humanoid") then Camera.CameraSubject = char.Humanoid end
-end
-
---------------------------------------------------------------------------------
--- HIT SOUND
---------------------------------------------------------------------------------
-local hitSoundTracked = {}
-local function TrackHumanoid(char)
-    local hum = char:FindFirstChildOfClass("Humanoid")
-    if not hum then return end
-    local plr = Players:GetPlayerFromCharacter(char)
-    if not plr or plr == LocalPlayer then return end
-    if hitSoundTracked[hum] then return end
-    hitSoundTracked[hum] = hum.Health
-
-    hum:GetPropertyChangedSignal("Health"):Connect(function()
-        if Settings.HitSound and hum.Health < hitSoundTracked[hum] then
-            local s = Instance.new("Sound")
-            s.SoundId = "rbxasset://sounds/electronicpingshort.wav"
-            s.Volume = 2
-            s.Parent = SoundService
-            s:Play()
-            Debris:AddItem(s, 1)
-        end
-        hitSoundTracked[hum] = hum.Health
-    end)
-end
-
-for _, p in ipairs(Players:GetPlayers()) do
-    if p ~= LocalPlayer then
-        if p.Character then TrackHumanoid(p.Character) end
-        p.CharacterAdded:Connect(TrackHumanoid)
-    end
-end
-Players.PlayerAdded:Connect(function(p)
-    if p ~= LocalPlayer then p.CharacterAdded:Connect(TrackHumanoid) end
-end)
-
---------------------------------------------------------------------------------
--- ВКЛАДКА ФИЧИ
---------------------------------------------------------------------------------
-CreateToggle(FeatTab, "FreeCam (Свободная камера)", Settings.FreeCam, function(v)
-    Settings.FreeCam = v
-    if v then StartFreeCam() else StopFreeCam() end
-end)
-
-CreateToggle(FeatTab, "Прицел на экране", Settings.Crosshair, function(v)
-    Settings.Crosshair = v
-    Crosshair.Visible = v
-end)
-
-CreateToggle(FeatTab, "Авто-спринт", Settings.AutoSprint, function(v) Settings.AutoSprint = v end)
-CreateNumber(FeatTab, "Скорость спринта", Settings.AutoSprintSpeed, function(n)
-    Settings.AutoSprintSpeed = math.clamp(n, 16, 200)
-end)
-
-CreateToggle(FeatTab, "Звук попадания", Settings.HitSound, function(v) Settings.HitSound = v end)
-
---------------------------------------------------------------------------------
--- ВКЛАДКА ИГРОК
---------------------------------------------------------------------------------
-CreateToggle(PlayerTab, "Бесконечный прыжок", Settings.InfiniteJump, function(v) Settings.InfiniteJump = v end)
-CreateNumber(PlayerTab, "Сила прыжка", Settings.JumpPower, function(n)
-    Settings.JumpPower = math.clamp(n, 0, 500)
-    local char = LocalPlayer.Character
-    if char then
-        local hum = char:FindFirstChildOfClass("Humanoid")
-        if hum then hum.UseJumpPower = true; hum.JumpPower = Settings.JumpPower end
-    end
-end)
-CreateNumber(PlayerTab, "Скорость ходьбы", Settings.WalkSpeed, function(n)
-    Settings.WalkSpeed = math.clamp(n, 0, 500)
-end)
-
-CreateToggle(PlayerTab, "Noclip (сквозь стены)", Settings.Noclip, function(v)
-    Settings.Noclip = v
-    if v then StartNoclip() else StopNoclip() end
-end)
-
-CreateAction(PlayerTab, "🔄 Сбросить (16 / 50)", function()
-    Settings.WalkSpeed = 16
-    Settings.JumpPower = 50
-    Settings.AutoSprint = false
-    local char = LocalPlayer.Character
-    if char then
-        local hum = char:FindFirstChildOfClass("Humanoid")
-        if hum then
-            hum.WalkSpeed = 16
-            hum.UseJumpPower = true
-            hum.JumpPower = 50
-        end
-    end
-end)
-
--- Поддержание WalkSpeed / JumpPower / AutoSprint
-RunService.Heartbeat:Connect(function()
-    local char = LocalPlayer.Character
-    if not char then return end
-    local hum = char:FindFirstChildOfClass("Humanoid")
-    if not hum then return end
-    local target = Settings.AutoSprint and Settings.AutoSprintSpeed or Settings.WalkSpeed
-    if hum.WalkSpeed ~= target then hum.WalkSpeed = target end
-    if hum.UseJumpPower and hum.JumpPower ~= Settings.JumpPower then
-        hum.JumpPower = Settings.JumpPower
-    end
-end)
-
--- Infinite jump
-UserInputService.JumpRequest:Connect(function()
-    if Settings.InfiniteJump then
-        local char = LocalPlayer.Character
-        if char then
-            local hum = char:FindFirstChildOfClass("Humanoid")
-            if hum then hum:ChangeState(Enum.HumanoidStateType.Jumping) end
-        end
-    end
-end)
-
---------------------------------------------------------------------------------
--- ВКЛАДКА ИГРОКИ (выбор игрока, слежка, инфо)
---------------------------------------------------------------------------------
-local PlayersScroll = Instance.new("ScrollingFrame", PlayersTab)
-PlayersScroll.Size = UDim2.new(1, -8, 0, 140)
-PlayersScroll.BackgroundColor3 = Color3.fromRGB(22, 22, 30)
-PlayersScroll.BorderSizePixel = 0
-PlayersScroll.ScrollBarThickness = 4
-PlayersScroll.CanvasSize = UDim2.new(0, 0, 0, 0)
-Instance.new("UICorner", PlayersScroll).CornerRadius = UDim.new(0, 6)
-local PlayersList = Instance.new("UIListLayout", PlayersScroll)
-PlayersList.Padding = UDim.new(0, 4)
-
-local InfoPanel = Instance.new("Frame", PlayersTab)
-InfoPanel.Size = UDim2.new(1, -8, 0, 110)
-InfoPanel.BackgroundColor3 = Color3.fromRGB(28, 28, 36)
-InfoPanel.BorderSizePixel = 0
-Instance.new("UICorner", InfoPanel).CornerRadius = UDim.new(0, 6)
-
-local InfoLabel = Instance.new("TextLabel", InfoPanel)
-InfoLabel.Size = UDim2.new(1, -16, 1, -16)
-InfoLabel.Position = UDim2.new(0, 8, 0, 8)
-InfoLabel.BackgroundTransparency = 1
-InfoLabel.Text = "Игрок не выбран"
-InfoLabel.TextColor3 = Color3.fromRGB(220, 220, 220)
-InfoLabel.Font = Enum.Font.Gotham
-InfoLabel.TextSize = 11
-InfoLabel.TextXAlignment = Enum.TextXAlignment.Left
-InfoLabel.TextYAlignment = Enum.TextYAlignment.Top
-InfoLabel.TextWrapped = true
-
-local SpectateBtn = Instance.new("TextButton", PlayersTab)
-SpectateBtn.Size = UDim2.new(1, -8, 0, 34)
-SpectateBtn.BackgroundColor3 = Color3.fromRGB(0, 130, 200)
-SpectateBtn.Text = "  👁 Следить за игроком"
-SpectateBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
-SpectateBtn.Font = Enum.Font.GothamSemibold
-SpectateBtn.TextSize = 13
-SpectateBtn.TextXAlignment = Enum.TextXAlignment.Left
-SpectateBtn.AutoButtonColor = false
-Instance.new("UICorner", SpectateBtn).CornerRadius = UDim.new(0, 6)
-
-local TPToBtn = Instance.new("TextButton", PlayersTab)
-TPToBtn.Size = UDim2.new(1, -8, 0, 34)
-TPToBtn.BackgroundColor3 = Color3.fromRGB(80, 60, 160)
-TPToBtn.Text = "  🎯 TP к игроку"
-TPToBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
-TPToBtn.Font = Enum.Font.GothamSemibold
-TPToBtn.TextSize = 13
-TPToBtn.TextXAlignment = Enum.TextXAlignment.Left
-TPToBtn.AutoButtonColor = false
-Instance.new("UICorner", TPToBtn).CornerRadius = UDim.new(0, 6)
-
-local UnselectBtn = Instance.new("TextButton", PlayersTab)
-UnselectBtn.Size = UDim2.new(1, -8, 0, 34)
-UnselectBtn.BackgroundColor3 = Color3.fromRGB(80, 30, 40)
-UnselectBtn.Text = "  ✖ Снять выбор"
-UnselectBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
-UnselectBtn.Font = Enum.Font.GothamSemibold
-UnselectBtn.TextSize = 13
-UnselectBtn.TextXAlignment = Enum.TextXAlignment.Left
-UnselectBtn.AutoButtonColor = false
-Instance.new("UICorner", UnselectBtn).CornerRadius = UDim.new(0, 6)
-
-local function RefreshPlayersList()
-    for _, c in ipairs(PlayersScroll:GetChildren()) do
-        if c:IsA("TextButton") then c:Destroy() end
-    end
-    for _, plr in ipairs(Players:GetPlayers()) do
-        local b = Instance.new("TextButton", PlayersScroll)
-        b.Size = UDim2.new(1, -8, 0, 30)
-        b.BackgroundColor3 = (Settings.SelectedPlayer == plr)
-            and Color3.fromRGB(0, 130, 200) or Color3.fromRGB(40, 40, 52)
-        b.Text = "  " .. (plr == LocalPlayer and "[Ты] " or "") .. plr.DisplayName
-        b.TextColor3 = Color3.fromRGB(230, 230, 230)
-        b.Font = Enum.Font.GothamSemibold
-        b.TextSize = 12
-        b.TextXAlignment = Enum.TextXAlignment.Left
-        b.AutoButtonColor = false
-        Instance.new("UICorner", b).CornerRadius = UDim.new(0, 4)
-        b.MouseButton1Click:Connect(function()
-            Settings.SelectedPlayer = plr
-            RefreshPlayersList()
-        end)
-    end
-    PlayersScroll.CanvasSize = UDim2.new(0, 0, 0, PlayersList.AbsoluteContentSize.Y + 8)
-end
-
-Players.PlayerAdded:Connect(RefreshPlayersList)
-Players.PlayerRemoving:Connect(function(p)
-    if Settings.SelectedPlayer == p then Settings.SelectedPlayer = nil end
-    if Settings.Spectating == p then Settings.Spectating = nil end
-    RefreshPlayersList()
-end)
-task.spawn(RefreshPlayersList)
-
--- Обновление инфо о выбранном игроке
-RunService.RenderStepped:Connect(function()
-    local plr = Settings.SelectedPlayer
-    if not plr then
-        InfoLabel.Text = "Игрок не выбран"
-        return
-    end
-
-    local char = plr.Character
-    local hum = char and char:FindFirstChildOfClass("Humanoid")
-    local hrp = char and char:FindFirstChild("HumanoidRootPart")
-
-    local hp = hum and math.floor(hum.Health) or 0
-    local maxHp = hum and math.floor(hum.MaxHealth) or 100
-    local dist = 0
-    local lhrp = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
-    if hrp and lhrp then dist = math.floor((hrp.Position - lhrp.Position).Magnitude) end
-
-    local teamName = plr.Team and plr.Team.Name or "Нет"
-    local isFriend = Settings.Friends[plr.UserId] and "Да" or "Нет"
-
-    InfoLabel.Text = string.format(
-        "Имя: %s\nНик: @%s\nUserID: %d\nHP: %d / %d\nДистанция: %d studs\nКоманда: %s\nДруг: %s",
-        plr.DisplayName, plr.Name, plr.UserId, hp, maxHp, dist, teamName, isFriend
-    )
-end)
-
--- Кнопки
-SpectateBtn.MouseButton1Click:Connect(function()
-    local plr = Settings.SelectedPlayer
-    if not plr then return end
-    if Settings.Spectating == plr then
-        Settings.Spectating = nil
-        SpectateBtn.Text = "  👁 Следить за игроком"
-        SpectateBtn.BackgroundColor3 = Color3.fromRGB(0, 130, 200)
+if not ScreenGui.Parent then ScreenGui.Parent = LP:WaitForChild("PlayerGui") end
+
+-- Кнопка GOD
+local GodBtn = Instance.new("TextButton")
+GodBtn.Size = UDim2.new(0, 110, 0, 44)
+GodBtn.Position = UDim2.new(1, -130, 0, 80)
+GodBtn.BackgroundColor3 = Color3.fromRGB(60, 62, 80)
+GodBtn.Text = "GOD OFF"
+GodBtn.TextColor3 = Color3.fromRGB(220, 220, 230)
+GodBtn.Font = Enum.Font.GothamBold
+GodBtn.TextSize = 12
+GodBtn.AutoButtonColor = false
+GodBtn.Parent = ScreenGui
+Instance.new("UICorner", GodBtn).CornerRadius = UDim.new(0, 8)
+local godStroke = Instance.new("UIStroke", GodBtn)
+godStroke.Color = Color3.fromRGB(90, 95, 120)
+godStroke.Thickness = 1.5
+
+-- Кнопка HITBOX TP
+local HitboxBtn = Instance.new("TextButton")
+HitboxBtn.Size = UDim2.new(0, 110, 0, 44)
+HitboxBtn.Position = UDim2.new(1, -130, 0, 132)
+HitboxBtn.BackgroundColor3 = Color3.fromRGB(60, 62, 80)
+HitboxBtn.Text = "HITBOX OFF"
+HitboxBtn.TextColor3 = Color3.fromRGB(220, 220, 230)
+HitboxBtn.Font = Enum.Font.GothamBold
+HitboxBtn.TextSize = 11
+HitboxBtn.AutoButtonColor = false
+HitboxBtn.Parent = ScreenGui
+Instance.new("UICorner", HitboxBtn).CornerRadius = UDim.new(0, 8)
+local hitboxStroke = Instance.new("UIStroke", HitboxBtn)
+hitboxStroke.Color = Color3.fromRGB(90, 95, 120)
+hitboxStroke.Thickness = 1.5
+
+local function UpdateUI()
+    if God.Enabled then
+        GodBtn.Text = "GOD ON"
+        GodBtn.BackgroundColor3 = Color3.fromRGB(75, 130, 220)
+        GodBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+        godStroke.Color = Color3.fromRGB(120, 170, 250)
     else
-        Settings.Spectating = plr
-        SpectateBtn.Text = "  👁 Прекратить слежку"
-        SpectateBtn.BackgroundColor3 = Color3.fromRGB(200, 60, 60)
+        GodBtn.Text = "GOD OFF"
+        GodBtn.BackgroundColor3 = Color3.fromRGB(60, 62, 80)
+        GodBtn.TextColor3 = Color3.fromRGB(220, 220, 230)
+        godStroke.Color = Color3.fromRGB(90, 95, 120)
     end
-end)
 
-TPToBtn.MouseButton1Click:Connect(function()
-    local plr = Settings.SelectedPlayer
-    if not plr or not plr.Character then return end
-    local hrp = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
-    local tHrp = plr.Character:FindFirstChild("HumanoidRootPart")
-    if hrp and tHrp then hrp.CFrame = tHrp.CFrame * CFrame.new(0, 0, -3) end
-end)
-
-UnselectBtn.MouseButton1Click:Connect(function()
-    Settings.SelectedPlayer = nil
-    Settings.Spectating = nil
-    SpectateBtn.Text = "  👁 Следить за игроком"
-    SpectateBtn.BackgroundColor3 = Color3.fromRGB(0, 130, 200)
-    RefreshPlayersList()
-end)
-
--- Камера слежки
-RunService.RenderStepped:Connect(function()
-    if Settings.Spectating then
-        local tChar = Settings.Spectating.Character
-        if tChar then
-            local hum = tChar:FindFirstChildOfClass("Humanoid")
-            if hum and hum.Health > 0 then
-                Camera.CameraSubject = hum
-                Camera.CameraType = Enum.CameraType.Custom
-            end
-        end
+    if HitboxTP.Enabled then
+        HitboxBtn.Text = "HITBOX ON"
+        HitboxBtn.BackgroundColor3 = Color3.fromRGB(75, 130, 220)
+        HitboxBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+        hitboxStroke.Color = Color3.fromRGB(120, 170, 250)
+    else
+        HitboxBtn.Text = "HITBOX OFF"
+        HitboxBtn.BackgroundColor3 = Color3.fromRGB(60, 62, 80)
+        HitboxBtn.TextColor3 = Color3.fromRGB(220, 220, 230)
+        hitboxStroke.Color = Color3.fromRGB(90, 95, 120)
     end
-end)
-
---------------------------------------------------------------------------------
--- FOV КРУГ
---------------------------------------------------------------------------------
-local FOVCircle = Drawing.new("Circle")
-FOVCircle.Position = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
-FOVCircle.Radius = Settings.FOVRadius
-FOVCircle.Color = Color3.fromRGB(255, 40, 60)
-FOVCircle.Thickness = 1.5
-FOVCircle.Filled = false
-FOVCircle.Visible = Settings.Aimbot and Settings.UIVisible
-
-RunService.RenderStepped:Connect(function()
-    FOVCircle.Position = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
-    FOVCircle.Visible = Settings.Aimbot and Settings.UIVisible
-end)
-
---------------------------------------------------------------------------------
--- ESP HIGHLIGHT
---------------------------------------------------------------------------------
-local function AddHighlight(player)
-    local function onChar(char)
-        if not char then return end
-        local hl = char:FindFirstChild("BloodZone_ESP") or Instance.new("Highlight")
-        hl.Name = "BloodZone_ESP"
-        hl.Adornee = char
-        hl.FillTransparency = 0.5
-        hl.OutlineColor = Color3.fromRGB(255, 255, 255)
-        hl.OutlineTransparency = 0
-        hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
-        hl.Parent = char
-    end
-    if player.Character then onChar(player.Character) end
-    player.CharacterAdded:Connect(onChar)
-end
-for _, p in ipairs(Players:GetPlayers()) do
-    if p ~= LocalPlayer then AddHighlight(p) end
-end
-Players.PlayerAdded:Connect(function(p)
-    if p ~= LocalPlayer then AddHighlight(p) end
-end)
-
-RunService.RenderStepped:Connect(function()
-    for _, p in ipairs(Players:GetPlayers()) do
-        if p ~= LocalPlayer and p.Character then
-            local hl = p.Character:FindFirstChild("BloodZone_ESP")
-            if hl then
-                hl.Enabled = Settings.ESP
-                if Settings.Friends[p.UserId] then
-                    hl.FillColor = Color3.fromRGB(0, 255, 120)
-                else
-                    hl.FillColor = Color3.fromRGB(255, 30, 60)
-                end
-            end
-        end
-    end
-end)
-
---------------------------------------------------------------------------------
--- AIMBOT
---------------------------------------------------------------------------------
-local function IsBulletPathClear(targetHead)
-    if not targetHead then return false end
-    local origin = Camera.CFrame.Position
-    local ignoreList = {LocalPlayer.Character, targetHead.Parent}
-    for _ = 1, 5 do
-        local p = RaycastParams.new()
-        p.FilterType = Enum.RaycastFilterType.Exclude
-        p.FilterDescendantsInstances = ignoreList
-        local res = Workspace:Raycast(origin, targetHead.Position - origin, p)
-        if not res then return true end
-        local hp = res.Instance
-        if hp.Transparency > 0.25 or hp.Material == Enum.Material.Glass
-           or hp.Name:lower():find("glass") or hp.Name:lower():find("window") then
-            table.insert(ignoreList, hp)
-        else return false end
-    end
-    return false
 end
 
-local function GetClosestTargetInFOV()
-    local closest, shortestDist = nil, Settings.FOVRadius
-    local center = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
-    for _, player in ipairs(Players:GetPlayers()) do
-        if player ~= LocalPlayer and not Settings.Friends[player.UserId]
-           and player.Character and player.Character:FindFirstChild("Humanoid")
-           and player.Character.Humanoid.Health > 0 then
-            local head = player.Character:FindFirstChild("Head")
-            if head then
-                local sp, on = Camera:WorldToViewportPoint(head.Position)
-                if on then
-                    local d = (Vector2.new(sp.X, sp.Y) - center).Magnitude
-                    if d <= shortestDist and IsBulletPathClear(head) then
-                        shortestDist = d; closest = player
-                    end
-                end
-            end
-        end
+local function ToggleGod()
+    God.Enabled = not God.Enabled
+    if God.Enabled then
+        EnableGod(LP.Character)
+    else
+        DisableGod()
     end
-    return closest
+    UpdateUI()
 end
 
---------------------------------------------------------------------------------
--- INPUT
---------------------------------------------------------------------------------
-local InputConn = UserInputService.InputBegan:Connect(function(input, gpe)
-    -- Click TP работает и на ПК, и на телефоне (если не клик по GUI)
-    if Settings.ClickTP and not gpe then
-        if input.UserInputType == Enum.UserInputType.MouseButton1
-        or input.UserInputType == Enum.UserInputType.Touch then
-            local pos = input.Position
-            local ray = Camera:ViewportPointToRay(pos.X, pos.Y)
-            local params = RaycastParams.new()
-            params.FilterType = Enum.RaycastFilterType.Exclude
-            params.FilterDescendantsInstances = {LocalPlayer.Character}
-            local res = Workspace:Raycast(ray.Origin, ray.Direction * 5000, params)
-            if res then
-                local hrp = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
-                if hrp then hrp.CFrame = CFrame.new(res.Position + Vector3.new(0, 3, 0)) end
-            end
-        end
+local function ToggleHitbox()
+    HitboxTP.Enabled = not HitboxTP.Enabled
+    if HitboxTP.Enabled then
+        EnableHitboxTP()
+    else
+        DisableHitboxTP()
     end
+    UpdateUI()
+end
 
+GodBtn.MouseButton1Click:Connect(ToggleGod)
+HitboxBtn.MouseButton1Click:Connect(ToggleHitbox)
+UpdateUI()
+
+-- Горячие клавиши
+UIS.InputBegan:Connect(function(input, gpe)
     if gpe then return end
-
-    if input.UserInputType == Enum.UserInputType.MouseButton2 then
-        Settings.IsRMBDown = true
-        Settings.LockedTarget = GetClosestTargetInFOV()
-    elseif input.KeyCode == Enum.KeyCode.Insert then
-        Settings.UIVisible = not Settings.UIVisible
-        MainFrame.Visible = Settings.UIVisible
-    elseif input.KeyCode == Enum.KeyCode.Delete then
-        StopFly(); StopNoclip(); StopFreeCam()
-        FOVCircle:Remove()
-        ScreenGui:Destroy()
-        for _, p in ipairs(Players:GetPlayers()) do
-            if p.Character and p.Character:FindFirstChild("BloodZone_ESP") then
-                p.Character.BloodZone_ESP:Destroy()
-            end
-        end
-    end
+    if input.KeyCode == Enum.KeyCode.G then ToggleGod() end
+    if input.KeyCode == Enum.KeyCode.H then ToggleHitbox() end
 end)
 
-UserInputService.InputEnded:Connect(function(input)
-    if input.UserInputType == Enum.UserInputType.MouseButton2 then
-        Settings.IsRMBDown = false
-        Settings.LockedTarget = nil
-    end
-end)
-
-ToggleBtn.MouseButton1Click:Connect(function()
-    Settings.UIVisible = not Settings.UIVisible
-    MainFrame.Visible = Settings.UIVisible
-end)
-CloseBtn.MouseButton1Click:Connect(function()
-    Settings.UIVisible = false
-    MainFrame.Visible = false
-end)
-
---------------------------------------------------------------------------------
--- AIMBOT LOOP
---------------------------------------------------------------------------------
-local AimConn = RunService.RenderStepped:Connect(function()
-    if not Settings.Aimbot or not Settings.IsRMBDown then return end
-    local target = Settings.LockedTarget
-    if target and not Settings.Friends[target.UserId]
-       and target.Character and target.Character:FindFirstChild("Humanoid")
-       and target.Character.Humanoid.Health > 0 then
-        local head = target.Character:FindFirstChild("Head")
-        if head and IsBulletPathClear(head) then
-            Camera.CFrame = CFrame.lookAt(Camera.CFrame.Position, head.Position)
-            if Settings.AutoShoot then
-                pcall(function()
-                    mouse1press()
-                    task.delay(0.01, function() mouse1release() end)
-                end)
-            end
-        else
-            Settings.LockedTarget = GetClosestTargetInFOV()
-        end
-    else
-        Settings.LockedTarget = GetClosestTargetInFOV()
-    end
-end)
-
-print("[Misty_Dany Hub V6] Загружено! Insert - свернуть, Delete - выгрузить.")
+print("[Misty God + Hitbox] Загружено. G = God, H = Hitbox TP.")

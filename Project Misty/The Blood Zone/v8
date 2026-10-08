@@ -1,0 +1,1944 @@
+--[[
+    Misty_Dany Hub | Blood Zone V8 (Clean GUI Edition)
+    ================================================================
+    Вся логика из V7 (ESP, Aimbot, Triggerbot, Friends, Players TP,
+    Waypoints, Inf Jump, Fix Underground, Auto-Fix, Auto-Rejoin,
+    Spectate, Custom Binds, Config save/load)
+    → пересажена в Clean GUI Template (табы + сайдбар).
+    + Пассивка: Возрождение около смерти (рандом X/Z в радиусе от места смерти)
+    ================================================================
+    Insert — показать/скрыть UI
+    Delete — полная выгрузка
+--]]
+
+if not game:IsLoaded() then game.Loaded:Wait() end
+
+--==============================================================
+--  СЕРВИСЫ
+--==============================================================
+local Players          = game:GetService("Players")
+local RunService       = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local Workspace        = game:GetService("Workspace")
+local HttpService      = game:GetService("HttpService")
+local CoreGui          = game:GetService("CoreGui")
+local TeleportService  = game:GetService("TeleportService")
+
+local LocalPlayer = Players.LocalPlayer
+local Camera      = Workspace.CurrentCamera
+
+--==============================================================
+--  СОСТОЯНИЕ
+--==============================================================
+local ScriptUnloaded     = false
+local WaitingBind        = nil
+local capturingBindingFor = nil
+local SpectateTarget     = nil
+local refreshSpectateList = nil -- forward declaration
+
+--==============================================================
+--  ПАЛИТРА
+--==============================================================
+local Palette = {
+    BG_MAIN       = Color3.fromRGB(10, 16, 30),
+    BG_SIDEBAR    = Color3.fromRGB(14, 20, 34),
+    BG_HEADER     = Color3.fromRGB(16, 26, 48),
+    BG_TAB        = Color3.fromRGB(18, 30, 54),
+    BG_BUTTON     = Color3.fromRGB(22, 34, 58),
+    BG_BUTTON_HOV = Color3.fromRGB(32, 50, 84),
+    BG_INPUT      = Color3.fromRGB(18, 28, 48),
+    BG_ROW        = Color3.fromRGB(20, 30, 52),
+    ACCENT        = Color3.fromRGB(56, 140, 255),
+    ACCENT_BRIGHT = Color3.fromRGB(96, 180, 255),
+    ACCENT_DEEP   = Color3.fromRGB(30, 80, 180),
+    TEXT          = Color3.fromRGB(225, 238, 255),
+    TEXT_DIM      = Color3.fromRGB(140, 170, 215),
+    TEXT_MUTED    = Color3.fromRGB(90, 115, 155),
+    ON            = Color3.fromRGB(40, 130, 255),
+    OFF           = Color3.fromRGB(28, 40, 65),
+    DANGER        = Color3.fromRGB(255, 90, 120),
+    WARN          = Color3.fromRGB(255, 200, 90),
+    SUCCESS       = Color3.fromRGB(90, 230, 170),
+    VIOLET        = Color3.fromRGB(160, 140, 255),
+}
+
+--==============================================================
+--  ХЕЛПЕРЫ
+--==============================================================
+local function applyCorner(inst, r)
+    local c = Instance.new("UICorner", inst)
+    c.CornerRadius = UDim.new(0, r or 8)
+    return c
+end
+local function applyStroke(inst, color, thickness, transparency)
+    local s = Instance.new("UIStroke", inst)
+    s.Color = color
+    s.Thickness = thickness or 1.3
+    s.Transparency = transparency or 0.3
+    s.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+    return s
+end
+local function applyGradient(inst, c1, c2, rotation)
+    local g = Instance.new("UIGradient", inst)
+    g.Color = ColorSequence.new(c1, c2)
+    g.Rotation = rotation or 90
+    return g
+end
+
+--==============================================================
+--  НАСТРОЙКИ
+--==============================================================
+local Settings = {
+    ESP = true,
+    Aimbot = true,
+    AutoShoot = true,
+    TargetPart = "HumanoidRootPart",
+    FOVRadius = 70,
+    LockedTarget = nil,
+
+    AimbotBind  = Enum.UserInputType.MouseButton2,
+    AutoLockBind = Enum.KeyCode.Zero,
+
+    IsAimbotHeld = false,
+    AutoLock0 = false,
+    Friends = {},
+    UIVisible = true
+}
+
+local BindNames = {
+    [Enum.UserInputType.MouseButton1] = "ЛКМ",
+    [Enum.UserInputType.MouseButton2] = "ПКМ",
+    [Enum.UserInputType.MouseButton3] = "СКМ",
+    [Enum.KeyCode.Zero] = "0",
+    [Enum.KeyCode.KeypadZero] = "Num0",
+}
+
+local function GetBindName(bind)
+    if not bind then return "?" end
+    if BindNames[bind] then return BindNames[bind] end
+    if typeof(bind) == "EnumItem" then return bind.Name end
+    return tostring(bind)
+end
+
+--==============================================================
+--  КОНФИГ
+--==============================================================
+local CONFIG_FILE = "MistyJump_config.json"
+local canSave = (typeof(writefile) == "function" and typeof(readfile) == "function")
+
+local Config = {
+    waypoints = {},
+    playerBinds = {},
+    guiPositions = {},
+}
+
+local function loadConfig()
+    if not canSave then return end
+    if typeof(isfile) == "function" and isfile(CONFIG_FILE) then
+        local ok, data = pcall(function()
+            return HttpService:JSONDecode(readfile(CONFIG_FILE))
+        end)
+        if ok and type(data) == "table" then
+            Config.waypoints    = data.waypoints    or {}
+            Config.playerBinds  = data.playerBinds  or {}
+            Config.guiPositions = data.guiPositions or {}
+        end
+    end
+end
+
+local function saveConfig()
+    if not canSave then return end
+    pcall(function()
+        writefile(CONFIG_FILE, HttpService:JSONEncode(Config))
+    end)
+end
+
+local function udim2ToTable(ud)
+    return { xs = ud.X.Scale, xo = ud.X.Offset, ys = ud.Y.Scale, yo = ud.Y.Offset }
+end
+local function tableToUdim2(t)
+    if not t then return nil end
+    return UDim2.new(t.xs or 0, t.xo or 0, t.ys or 0, t.yo or 0)
+end
+local function SaveGuiPosition(key, frame)
+    if not key or not frame then return end
+    Config.guiPositions[key] = udim2ToTable(frame.Position)
+    saveConfig()
+end
+local function LoadGuiPosition(key, frame)
+    if not key or not frame then return end
+    local t = Config.guiPositions[key]
+    if t then
+        local pos = tableToUdim2(t)
+        if pos then frame.Position = pos end
+    end
+end
+
+loadConfig()
+
+--==============================================================
+--  SCREENGUI
+--==============================================================
+local ScreenGui = Instance.new("ScreenGui")
+ScreenGui.Name = "MistyDany_BloodZone_V8"
+ScreenGui.ResetOnSpawn = false
+ScreenGui.IgnoreGuiInset = true
+
+local ok = pcall(function()
+    if gethui then ScreenGui.Parent = gethui()
+    elseif syn and syn.protect_gui then syn.protect_gui(ScreenGui); ScreenGui.Parent = CoreGui
+    else ScreenGui.Parent = CoreGui end
+end)
+if not ok or not ScreenGui.Parent then
+    ScreenGui.Parent = LocalPlayer:WaitForChild("PlayerGui")
+end
+
+--==============================================================
+--  NOTIFICATIONS
+--==============================================================
+local NotifHolder = Instance.new("Frame")
+NotifHolder.Name = "NotifHolder"
+NotifHolder.Size = UDim2.new(0, 300, 1, -20)
+NotifHolder.Position = UDim2.new(1, -310, 0, 10)
+NotifHolder.BackgroundTransparency = 1
+NotifHolder.Parent = ScreenGui
+
+local NotifLayout = Instance.new("UIListLayout", NotifHolder)
+NotifLayout.SortOrder = Enum.SortOrder.LayoutOrder
+NotifLayout.Padding = UDim.new(0, 6)
+NotifLayout.VerticalAlignment = Enum.VerticalAlignment.Top
+NotifLayout.HorizontalAlignment = Enum.HorizontalAlignment.Right
+
+local notifOrder = 0
+local function Notify(title, text, duration)
+    duration = duration or 3
+    notifOrder = notifOrder + 1
+    local notif = Instance.new("Frame")
+    notif.Size = UDim2.new(1, 0, 0, 62)
+    notif.BackgroundColor3 = Palette.BG_BUTTON
+    notif.BorderSizePixel = 0
+    notif.LayoutOrder = -notifOrder
+    applyCorner(notif, 8)
+    applyStroke(notif, Palette.ACCENT_BRIGHT, 1.4, 0.3)
+    applyGradient(notif, Color3.fromRGB(28, 44, 74), Palette.BG_MAIN, 90)
+    notif.Parent = NotifHolder
+
+    local bar = Instance.new("Frame", notif)
+    bar.Size = UDim2.new(0, 4, 1, -14)
+    bar.Position = UDim2.new(0, 6, 0, 7)
+    bar.BackgroundColor3 = Palette.ACCENT_BRIGHT
+    bar.BorderSizePixel = 0
+    applyCorner(bar, 2)
+
+    local t = Instance.new("TextLabel", notif)
+    t.BackgroundTransparency = 1
+    t.Size = UDim2.new(1, -22, 0, 18)
+    t.Position = UDim2.new(0, 18, 0, 6)
+    t.Font = Enum.Font.GothamBold
+    t.TextSize = 12
+    t.TextColor3 = Palette.ACCENT_BRIGHT
+    t.TextXAlignment = Enum.TextXAlignment.Left
+    t.Text = tostring(title)
+
+    local d = Instance.new("TextLabel", notif)
+    d.BackgroundTransparency = 1
+    d.Size = UDim2.new(1, -22, 0, 30)
+    d.Position = UDim2.new(0, 18, 0, 24)
+    d.Font = Enum.Font.Gotham
+    d.TextSize = 11
+    d.TextColor3 = Palette.TEXT_DIM
+    d.TextXAlignment = Enum.TextXAlignment.Left
+    d.TextYAlignment = Enum.TextYAlignment.Top
+    d.TextWrapped = true
+    d.Text = tostring(text)
+
+    notif.Position = UDim2.new(1, 40, 0, 0)
+    task.spawn(function()
+        notif:TweenPosition(UDim2.new(0, 0, 0, 0), "Out", "Quad", 0.25, true)
+    end)
+    task.delay(duration, function()
+        if notif.Parent then
+            pcall(function() notif:TweenPosition(UDim2.new(1, 40, 0, 0), "In", "Quad", 0.25, true) end)
+            task.wait(0.3)
+            if notif.Parent then notif:Destroy() end
+        end
+    end)
+end
+
+--==============================================================
+--  MAIN WINDOW
+--==============================================================
+local MainFrame = Instance.new("Frame")
+MainFrame.Name = "MainFrame"
+MainFrame.Size = UDim2.new(0, 660, 0, 500)
+MainFrame.Position = UDim2.new(0.5, -330, 0.5, -250)
+MainFrame.BackgroundColor3 = Palette.BG_MAIN
+MainFrame.BorderSizePixel = 0
+MainFrame.ClipsDescendants = true
+MainFrame.Parent = ScreenGui
+applyCorner(MainFrame, 12)
+applyStroke(MainFrame, Palette.ACCENT_BRIGHT, 2.4, 0.55)
+applyStroke(MainFrame, Palette.ACCENT, 1.2, 0.2)
+applyGradient(MainFrame, Color3.fromRGB(22, 36, 62), Palette.BG_MAIN, 90)
+
+LoadGuiPosition("main", MainFrame)
+
+--==============================================================
+--  HEADER
+--==============================================================
+local Header = Instance.new("Frame", MainFrame)
+Header.Size = UDim2.new(1, 0, 0, 44)
+Header.BackgroundColor3 = Palette.BG_HEADER
+Header.BorderSizePixel = 0
+applyCorner(Header, 12)
+applyGradient(Header, Color3.fromRGB(30, 52, 96), Color3.fromRGB(16, 26, 48), 0)
+
+local HeaderLine = Instance.new("Frame", Header)
+HeaderLine.Size = UDim2.new(1, 0, 0, 2)
+HeaderLine.Position = UDim2.new(0, 0, 1, -2)
+HeaderLine.BackgroundColor3 = Palette.ACCENT
+HeaderLine.BorderSizePixel = 0
+applyGradient(HeaderLine, Palette.ACCENT_BRIGHT, Palette.ACCENT_DEEP, 0)
+
+local Logo = Instance.new("Frame", Header)
+Logo.Size = UDim2.new(0, 26, 0, 26)
+Logo.Position = UDim2.new(0, 12, 0.5, -13)
+Logo.BackgroundColor3 = Palette.ACCENT
+Logo.BorderSizePixel = 0
+applyCorner(Logo, 13)
+applyGradient(Logo, Palette.ACCENT_BRIGHT, Palette.ACCENT_DEEP, 135)
+
+local Title = Instance.new("TextLabel", Header)
+Title.Size = UDim2.new(1, -140, 1, 0)
+Title.Position = UDim2.new(0, 48, 0, 0)
+Title.BackgroundTransparency = 1
+Title.Text = "Misty_Dany Hub  |  Blood Zone V8"
+Title.TextColor3 = Palette.TEXT
+Title.TextSize = 13
+Title.Font = Enum.Font.GothamBold
+Title.TextXAlignment = Enum.TextXAlignment.Left
+
+local function makeHeaderBtn(txt, color, xOffset)
+    local b = Instance.new("TextButton", Header)
+    b.Size = UDim2.new(0, 26, 0, 26)
+    b.Position = UDim2.new(1, xOffset, 0.5, -13)
+    b.BackgroundColor3 = Palette.BG_BUTTON
+    b.BorderSizePixel = 0
+    b.Font = Enum.Font.GothamBold
+    b.Text = txt
+    b.TextSize = 14
+    b.TextColor3 = color
+    applyCorner(b, 6)
+    applyStroke(b, color, 1, 0.4)
+    return b
+end
+
+local MinimizeBtn = makeHeaderBtn("—", Palette.TEXT_DIM, -70)
+local DestroyBtn  = makeHeaderBtn("X", Palette.DANGER, -38)
+
+--==============================================================
+--  SIDEBAR
+--==============================================================
+local Sidebar = Instance.new("Frame", MainFrame)
+Sidebar.Size = UDim2.new(0, 140, 1, -44 - 8)
+Sidebar.Position = UDim2.new(0, 8, 0, 48)
+Sidebar.BackgroundColor3 = Palette.BG_SIDEBAR
+Sidebar.BorderSizePixel = 0
+applyCorner(Sidebar, 10)
+applyStroke(Sidebar, Palette.ACCENT_DEEP, 1, 0.5)
+
+local SidebarLayout = Instance.new("UIListLayout", Sidebar)
+SidebarLayout.SortOrder = Enum.SortOrder.LayoutOrder
+SidebarLayout.Padding = UDim.new(0, 4)
+SidebarLayout.HorizontalAlignment = Enum.HorizontalAlignment.Center
+
+local SidebarPad = Instance.new("UIPadding", Sidebar)
+SidebarPad.PaddingTop = UDim.new(0, 6)
+SidebarPad.PaddingLeft = UDim.new(0, 6)
+SidebarPad.PaddingRight = UDim.new(0, 6)
+
+--==============================================================
+--  CONTENT AREA
+--==============================================================
+local ContentArea = Instance.new("Frame", MainFrame)
+ContentArea.Size = UDim2.new(1, -140 - 20, 1, -44 - 8)
+ContentArea.Position = UDim2.new(0, 140 + 12, 0, 48)
+ContentArea.BackgroundTransparency = 1
+
+local function createPage(name)
+    local p = Instance.new("ScrollingFrame")
+    p.Name = name
+    p.Size = UDim2.new(1, 0, 1, 0)
+    p.Position = UDim2.new(0, 0, 0, 0)
+    p.BackgroundTransparency = 1
+    p.BorderSizePixel = 0
+    p.ScrollBarThickness = 4
+    p.ScrollBarImageColor3 = Palette.ACCENT
+    p.CanvasSize = UDim2.new(0, 0, 0, 0)
+    p.AutomaticCanvasSize = Enum.AutomaticSize.Y
+    p.Visible = false
+    p.Parent = ContentArea
+    local layout = Instance.new("UIListLayout", p)
+    layout.SortOrder = Enum.SortOrder.LayoutOrder
+    layout.Padding = UDim.new(0, 8)
+    local pad = Instance.new("UIPadding", p)
+    pad.PaddingLeft = UDim.new(0, 4)
+    pad.PaddingRight = UDim.new(0, 6)
+    pad.PaddingTop = UDim.new(0, 4)
+    pad.PaddingBottom = UDim.new(0, 6)
+    return p
+end
+
+local PageCombat    = createPage("Combat")
+local PageUtility   = createPage("Utility")
+local PagePlayers   = createPage("Players")
+local PageWaypoints = createPage("Waypoints")
+local PageFriends   = createPage("Friends")
+local PageSpectate  = createPage("Spectate")
+
+--==============================================================
+--  TABS
+--==============================================================
+local tabs = {}
+local currentTab = nil
+
+local function switchTab(name)
+    for _, t in ipairs(tabs) do
+        t.page.Visible = (t.name == name)
+        if t.name == name then
+            t.btn.BackgroundColor3 = Palette.ACCENT
+            t.btn.TextColor3 = Color3.fromRGB(255, 255, 255)
+            t.stroke.Color = Palette.ACCENT_BRIGHT
+            t.stroke.Transparency = 0.1
+        else
+            t.btn.BackgroundColor3 = Palette.BG_TAB
+            t.btn.TextColor3 = Palette.TEXT_DIM
+            t.stroke.Color = Palette.ACCENT_DEEP
+            t.stroke.Transparency = 0.6
+        end
+    end
+    currentTab = name
+end
+
+local function createTab(name, label, page)
+    local btn = Instance.new("TextButton", Sidebar)
+    btn.Size = UDim2.new(1, 0, 0, 32)
+    btn.BackgroundColor3 = Palette.BG_TAB
+    btn.BorderSizePixel = 0
+    btn.Font = Enum.Font.GothamBold
+    btn.TextSize = 11
+    btn.Text = label
+    btn.TextColor3 = Palette.TEXT_DIM
+    btn.AutoButtonColor = false
+    applyCorner(btn, 7)
+    local stroke = applyStroke(btn, Palette.ACCENT_DEEP, 1, 0.6)
+
+    btn.MouseButton1Click:Connect(function() switchTab(name) end)
+    btn.MouseEnter:Connect(function()
+        if currentTab ~= name then btn.BackgroundColor3 = Palette.BG_BUTTON_HOV end
+    end)
+    btn.MouseLeave:Connect(function()
+        if currentTab ~= name then btn.BackgroundColor3 = Palette.BG_TAB end
+    end)
+    table.insert(tabs, { name = name, btn = btn, page = page, stroke = stroke })
+end
+
+createTab("combat",    "Бой",         PageCombat)
+createTab("utility",   "Утилиты",     PageUtility)
+createTab("players",   "Игроки",      PagePlayers)
+createTab("waypoints", "Точки",       PageWaypoints)
+createTab("friends",   "Друзья",      PageFriends)
+createTab("spectate",  "Наблюдение",  PageSpectate)
+
+switchTab("combat")
+
+--==============================================================
+--  DRAG + RESIZE
+--==============================================================
+local dragging, dragStart, startPos
+Header.InputBegan:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 then
+        dragging = true; dragStart = input.Position; startPos = MainFrame.Position
+    end
+end)
+Header.InputEnded:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 then
+        dragging = false
+        SaveGuiPosition("main", MainFrame)
+    end
+end)
+UserInputService.InputChanged:Connect(function(input)
+    if dragging and input.UserInputType == Enum.UserInputType.MouseMovement then
+        local d = input.Position - dragStart
+        MainFrame.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + d.X, startPos.Y.Scale, startPos.Y.Offset + d.Y)
+    end
+end)
+
+local ResizeBtn = Instance.new("TextButton", MainFrame)
+ResizeBtn.Size = UDim2.new(0, 18, 0, 18)
+ResizeBtn.Position = UDim2.new(1, -20, 1, -20)
+ResizeBtn.BackgroundTransparency = 1
+ResizeBtn.Text = "◢"
+ResizeBtn.TextColor3 = Palette.ACCENT_BRIGHT
+ResizeBtn.TextSize = 12
+ResizeBtn.Font = Enum.Font.GothamBold
+
+local resizing, resizeStart, startSize
+ResizeBtn.InputBegan:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 then
+        resizing = true; resizeStart = input.Position; startSize = MainFrame.Size
+    end
+end)
+ResizeBtn.InputEnded:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 then resizing = false end
+end)
+UserInputService.InputChanged:Connect(function(input)
+    if resizing and input.UserInputType == Enum.UserInputType.MouseMovement then
+        local d = input.Position - resizeStart
+        MainFrame.Size = UDim2.new(0, math.max(520, startSize.X.Offset + d.X), 0, math.max(380, startSize.Y.Offset + d.Y))
+    end
+end)
+
+--==============================================================
+--  COMPONENTS
+--==============================================================
+local function styleButton(btn, accent)
+    btn.BackgroundColor3 = Palette.BG_BUTTON
+    btn.BorderSizePixel = 0
+    btn.Font = Enum.Font.GothamBold
+    btn.TextSize = 12
+    btn.TextColor3 = Palette.TEXT
+    applyCorner(btn, 8)
+    local st = applyStroke(btn, accent or Palette.ACCENT, 1.2, 0.35)
+    applyGradient(btn, Color3.fromRGB(28, 42, 72), Palette.BG_BUTTON, 90)
+    return st
+end
+
+local function CreateSection(text, parent, accentColor)
+    local holder = Instance.new("Frame", parent)
+    holder.Size = UDim2.new(1, 0, 0, 22)
+    holder.BackgroundTransparency = 1
+
+    local label = Instance.new("TextLabel", holder)
+    label.BackgroundTransparency = 1
+    label.Size = UDim2.new(0, 160, 1, 0)
+    label.Position = UDim2.new(0, 2, 0, 0)
+    label.Font = Enum.Font.GothamBold
+    label.TextSize = 10
+    label.TextColor3 = accentColor or Palette.TEXT_MUTED
+    label.TextXAlignment = Enum.TextXAlignment.Left
+    label.Text = string.upper(text)
+
+    local line = Instance.new("Frame", holder)
+    line.BackgroundColor3 = accentColor or Palette.ACCENT_DEEP
+    line.BackgroundTransparency = 0.5
+    line.BorderSizePixel = 0
+    line.Position = UDim2.new(0, 160, 0.5, -0.5)
+    line.Size = UDim2.new(1, -162, 0, 1)
+    return holder
+end
+
+local function CreateActionButton(text, accentColor, parent, onClick)
+    local b = Instance.new("TextButton", parent)
+    b.Size = UDim2.new(1, 0, 0, 34)
+    b.Text = text
+    b.TextColor3 = Palette.TEXT
+    styleButton(b, accentColor or Palette.ACCENT)
+    if onClick then b.MouseButton1Click:Connect(onClick) end
+    return b
+end
+
+local function CreateToggle(text, state, callback, parent)
+    local Btn = Instance.new("TextButton", parent)
+    Btn.Size = UDim2.new(1, 0, 0, 36)
+    Btn.BackgroundColor3 = state and Palette.ON or Palette.OFF
+    Btn.Text = ""
+    Btn.AutoButtonColor = false
+    applyCorner(Btn, 8)
+
+    local st = applyStroke(Btn, state and Palette.ACCENT_BRIGHT or Palette.ACCENT_DEEP, 1.2, 0.3)
+    local gr = applyGradient(Btn,
+        state and Color3.fromRGB(60, 140, 255) or Color3.fromRGB(30, 44, 70),
+        state and Color3.fromRGB(30, 90, 200) or Color3.fromRGB(18, 28, 48), 90)
+
+    local Ind = Instance.new("Frame", Btn)
+    Ind.Size = UDim2.new(0, 4, 1, -14)
+    Ind.Position = UDim2.new(0, 7, 0, 7)
+    Ind.BackgroundColor3 = state and Palette.ACCENT_BRIGHT or Palette.TEXT_MUTED
+    Ind.BorderSizePixel = 0
+    applyCorner(Ind, 2)
+
+    local lbl = Instance.new("TextLabel", Btn)
+    lbl.BackgroundTransparency = 1
+    lbl.Size = UDim2.new(1, -90, 1, 0)
+    lbl.Position = UDim2.new(0, 22, 0, 0)
+    lbl.Font = Enum.Font.GothamBold
+    lbl.TextSize = 12
+    lbl.TextColor3 = state and Palette.TEXT or Palette.TEXT_DIM
+    lbl.TextXAlignment = Enum.TextXAlignment.Left
+    lbl.Text = text
+
+    local StL = Instance.new("TextLabel", Btn)
+    StL.BackgroundTransparency = 1
+    StL.Position = UDim2.new(1, -74, 0, 0)
+    StL.Size = UDim2.new(0, 66, 1, 0)
+    StL.Font = Enum.Font.GothamBold
+    StL.TextSize = 11
+    StL.TextColor3 = state and Palette.TEXT or Palette.TEXT_MUTED
+    StL.TextXAlignment = Enum.TextXAlignment.Right
+    StL.Text = state and "ON" or "OFF"
+
+    Btn.MouseEnter:Connect(function() if not state then Btn.BackgroundColor3 = Palette.BG_BUTTON_HOV end end)
+    Btn.MouseLeave:Connect(function() if not state then Btn.BackgroundColor3 = Palette.OFF end end)
+
+    Btn.MouseButton1Click:Connect(function()
+        state = not state
+        Btn.BackgroundColor3 = state and Palette.ON or Palette.OFF
+        st.Color = state and Palette.ACCENT_BRIGHT or Palette.ACCENT_DEEP
+        gr.Color = ColorSequence.new(
+            state and Color3.fromRGB(60, 140, 255) or Color3.fromRGB(30, 44, 70),
+            state and Color3.fromRGB(30, 90, 200) or Color3.fromRGB(18, 28, 48))
+        Ind.BackgroundColor3 = state and Palette.ACCENT_BRIGHT or Palette.TEXT_MUTED
+        lbl.TextColor3 = state and Palette.TEXT or Palette.TEXT_DIM
+        StL.TextColor3 = state and Palette.TEXT or Palette.TEXT_MUTED
+        StL.Text = state and "ON" or "OFF"
+        if callback then callback(state) end
+    end)
+    return Btn
+end
+
+local function CreateSlider(labelText, minVal, maxVal, initial, parent, onChange)
+    local frame = Instance.new("Frame", parent)
+    frame.Size = UDim2.new(1, 0, 0, 54)
+    frame.BackgroundColor3 = Palette.BG_BUTTON
+    frame.BorderSizePixel = 0
+    applyCorner(frame, 8)
+    applyStroke(frame, Palette.ACCENT, 1.2, 0.3)
+    applyGradient(frame, Color3.fromRGB(28, 42, 72), Palette.BG_BUTTON, 90)
+
+    local label = Instance.new("TextLabel", frame)
+    label.Size = UDim2.new(1, -22, 0, 22)
+    label.Position = UDim2.new(0, 16, 0, 4)
+    label.BackgroundTransparency = 1
+    label.Text = labelText .. ": " .. initial
+    label.TextColor3 = Palette.TEXT
+    label.Font = Enum.Font.GothamBold
+    label.TextSize = 11
+    label.TextXAlignment = Enum.TextXAlignment.Left
+
+    local back = Instance.new("Frame", frame)
+    back.Size = UDim2.new(1, -32, 0, 8)
+    back.Position = UDim2.new(0, 16, 0, 36)
+    back.BackgroundColor3 = Color3.fromRGB(12, 20, 36)
+    back.BorderSizePixel = 0
+    applyCorner(back, 4)
+    applyStroke(back, Palette.ACCENT_DEEP, 1, 0.5)
+
+    local startPos = math.clamp((initial - minVal) / (maxVal - minVal), 0, 1)
+
+    local fill = Instance.new("Frame", back)
+    fill.Size = UDim2.new(startPos, 0, 1, 0)
+    fill.BackgroundColor3 = Palette.ACCENT_BRIGHT
+    fill.BorderSizePixel = 0
+    applyCorner(fill, 4)
+    applyGradient(fill, Palette.ACCENT_BRIGHT, Palette.ACCENT, 0)
+
+    local knob = Instance.new("Frame", back)
+    knob.Size = UDim2.new(0, 14, 0, 14)
+    knob.Position = UDim2.new(startPos, -7, 0.5, -7)
+    knob.BackgroundColor3 = Palette.TEXT
+    knob.BorderSizePixel = 0
+    applyCorner(knob, 7)
+    applyStroke(knob, Palette.ACCENT_BRIGHT, 2, 0)
+
+    local sliding = false
+    local function update(input)
+        local pos = math.clamp((input.Position.X - back.AbsolutePosition.X) / back.AbsoluteSize.X, 0, 1)
+        local val = math.floor(minVal + (maxVal - minVal) * pos)
+        fill.Size = UDim2.new(pos, 0, 1, 0)
+        knob.Position = UDim2.new(pos, -7, 0.5, -7)
+        label.Text = labelText .. ": " .. val
+        if onChange then onChange(val) end
+    end
+    back.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 then
+            sliding = true; update(input)
+        end
+    end)
+    UserInputService.InputEnded:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 then sliding = false end
+    end)
+    UserInputService.InputChanged:Connect(function(input)
+        if sliding and input.UserInputType == Enum.UserInputType.MouseMovement then update(input) end
+    end)
+    return frame
+end
+
+-- Bind-кнопка (для захвата клавиши мыши/клавиатуры)
+local function CreateBindButton(labelText, getBind, setBind, parent)
+    local Btn = Instance.new("TextButton", parent)
+    Btn.Size = UDim2.new(1, 0, 0, 36)
+    Btn.Text = ""
+    Btn.AutoButtonColor = false
+    styleButton(Btn, Palette.ACCENT)
+
+    local lbl = Instance.new("TextLabel", Btn)
+    lbl.BackgroundTransparency = 1
+    lbl.Size = UDim2.new(1, -22, 1, 0)
+    lbl.Position = UDim2.new(0, 14, 0, 0)
+    lbl.Font = Enum.Font.GothamBold
+    lbl.TextSize = 12
+    lbl.TextColor3 = Palette.TEXT
+    lbl.TextXAlignment = Enum.TextXAlignment.Left
+    lbl.Text = labelText .. ": " .. GetBindName(getBind())
+
+    Btn.MouseButton1Click:Connect(function()
+        task.spawn(function()
+            RunService.RenderStepped:Wait()
+            WaitingBind = { Button = Btn, Label = labelText, Set = setBind, Get = getBind }
+            lbl.Text = labelText .. ": [нажми...]"
+            Btn.BackgroundColor3 = Palette.WARN
+        end)
+    end)
+    return Btn
+end
+
+-- TextInput
+local function CreateTextInput(placeholder, parent)
+    local t = Instance.new("TextBox", parent)
+    t.Size = UDim2.new(1, 0, 0, 30)
+    t.BackgroundColor3 = Palette.BG_INPUT
+    t.BorderSizePixel = 0
+    t.Font = Enum.Font.Gotham
+    t.TextSize = 12
+    t.TextColor3 = Palette.TEXT
+    t.PlaceholderText = placeholder
+    t.PlaceholderColor3 = Palette.TEXT_MUTED
+    t.Text = ""
+    t.ClearTextOnFocus = false
+    applyCorner(t, 6)
+    applyStroke(t, Palette.ACCENT_DEEP, 1, 0.4)
+    return t
+end
+
+--==============================================================
+--  ЛОГИКА — ESP / AIMBOT
+--==============================================================
+local function GetTargetPart(char)
+    if not char then return nil end
+    if Settings.TargetPart == "Head" then
+        return char:FindFirstChild("Head")
+    else
+        return char:FindFirstChild("HumanoidRootPart") or char:FindFirstChild("UpperTorso") or char:FindFirstChild("Torso")
+    end
+end
+
+local function IsBulletPathClear(targetPart)
+    if not targetPart then return false end
+    local origin = Camera.CFrame.Position
+    local ignoreList = {LocalPlayer.Character, targetPart.Parent}
+    for _ = 1, 5 do
+        local rp = RaycastParams.new()
+        rp.FilterType = Enum.RaycastFilterType.Exclude
+        rp.FilterDescendantsInstances = ignoreList
+        local result = Workspace:Raycast(origin, targetPart.Position - origin, rp)
+        if not result then return true end
+        local hit = result.Instance
+        if hit.Transparency > 0.25 or hit.Material == Enum.Material.Glass
+           or hit.Name:lower():find("glass") or hit.Name:lower():find("window") then
+            table.insert(ignoreList, hit)
+        else
+            return false
+        end
+    end
+    return false
+end
+
+local function GetClosestTargetInFOV()
+    local closest = nil
+    local shortestDist = Settings.FOVRadius
+    local center = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
+
+    for _, player in pairs(Players:GetPlayers()) do
+        if player ~= LocalPlayer and not Settings.Friends[player.UserId]
+           and player.Character and player.Character:FindFirstChild("Humanoid")
+           and player.Character.Humanoid.Health > 0 then
+            local tp = GetTargetPart(player.Character)
+            if tp then
+                local sp, onScreen = Camera:WorldToViewportPoint(tp.Position)
+                if onScreen then
+                    local d = (Vector2.new(sp.X, sp.Y) - center).Magnitude
+                    if d <= shortestDist and IsBulletPathClear(tp) then
+                        shortestDist = d
+                        closest = player
+                    end
+                end
+            end
+        end
+    end
+    return closest
+end
+
+-- AddHighlight
+local function AddHighlight(player)
+    local function onChar(char)
+        if not char then return end
+        local hl = char:FindFirstChild("BloodZone_ESP") or Instance.new("Highlight")
+        hl.Name = "BloodZone_ESP"
+        hl.Adornee = char
+        hl.FillTransparency = 0.4
+        hl.OutlineColor = Color3.fromRGB(255, 255, 255)
+        hl.OutlineTransparency = 0
+        hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+        hl.Parent = char
+
+        task.spawn(function()
+            local head = char:WaitForChild("Head", 5)
+            if head then
+                local bgui = head:FindFirstChild("BloodZone_Tag") or Instance.new("BillboardGui")
+                bgui.Name = "BloodZone_Tag"
+                bgui.Adornee = head
+                bgui.Size = UDim2.new(0, 200, 0, 30)
+                bgui.StudsOffset = Vector3.new(0, 2.5, 0)
+                bgui.AlwaysOnTop = true
+                bgui.Parent = head
+
+                local label = bgui:FindFirstChild("TagLabel") or Instance.new("TextLabel")
+                label.Name = "TagLabel"
+                label.Size = UDim2.new(1, 0, 1, 0)
+                label.BackgroundTransparency = 1
+                label.TextColor3 = Color3.fromRGB(255, 255, 255)
+                label.TextStrokeTransparency = 0
+                label.TextStrokeColor3 = Color3.fromRGB(0, 0, 0)
+                label.Font = Enum.Font.GothamBold
+                label.TextSize = 12
+                label.Parent = bgui
+            end
+        end)
+    end
+    if player.Character then onChar(player.Character) end
+    player.CharacterAdded:Connect(onChar)
+end
+
+for _, p in pairs(Players:GetPlayers()) do
+    if p ~= LocalPlayer then AddHighlight(p) end
+end
+Players.PlayerAdded:Connect(function(p) if p ~= LocalPlayer then AddHighlight(p) end end)
+
+-- FOV Circle
+local FOVCircle = Drawing.new("Circle")
+FOVCircle.Position = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
+FOVCircle.Radius = Settings.FOVRadius
+FOVCircle.Color = Color3.fromRGB(96, 180, 255)
+FOVCircle.Thickness = 1.5
+FOVCircle.Filled = false
+FOVCircle.Visible = Settings.Aimbot and Settings.UIVisible
+
+local RenderConn = RunService.RenderStepped:Connect(function()
+    FOVCircle.Position = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
+    FOVCircle.Radius = Settings.FOVRadius
+    FOVCircle.Visible = Settings.Aimbot and Settings.UIVisible and not SpectateTarget
+end)
+
+local ESPConn = RunService.RenderStepped:Connect(function()
+    for _, p in pairs(Players:GetPlayers()) do
+        if p ~= LocalPlayer and p.Character then
+            local char = p.Character
+            local hl = char:FindFirstChild("BloodZone_ESP")
+            local head = char:FindFirstChild("Head")
+            local bgui = head and head:FindFirstChild("BloodZone_Tag")
+            local label = bgui and bgui:FindFirstChild("TagLabel")
+            local hum = char:FindFirstChild("Humanoid")
+
+            local isFriend = Settings.Friends[p.UserId]
+            local mainColor = isFriend and Color3.fromRGB(0, 255, 120) or Color3.fromRGB(255, 30, 60)
+
+            if hl then
+                hl.Enabled = Settings.ESP
+                hl.FillColor = mainColor
+            end
+            if bgui and label then
+                bgui.Enabled = Settings.ESP
+                if hum and head and LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Head") then
+                    local dist = math.floor((head.Position - LocalPlayer.Character.Head.Position).Magnitude)
+                    label.Text = string.format("%s [%d HP] (%dm)", p.DisplayName, math.floor(math.max(0, hum.Health)), dist)
+                    label.TextColor3 = mainColor
+                end
+            end
+        end
+    end
+end)
+
+local AimConn = RunService.RenderStepped:Connect(function()
+    if SpectateTarget then return end
+    local isAiming = Settings.IsAimbotHeld or Settings.AutoLock0
+    if not Settings.Aimbot or not isAiming then return end
+
+    local target = Settings.LockedTarget
+    if target and not Settings.Friends[target.UserId] and target.Character
+       and target.Character:FindFirstChild("Humanoid") and target.Character.Humanoid.Health > 0 then
+        local tp = GetTargetPart(target.Character)
+        if tp and IsBulletPathClear(tp) then
+            Camera.CFrame = CFrame.lookAt(Camera.CFrame.Position, tp.Position)
+            if Settings.AutoShoot then
+                pcall(function() mouse1press(); task.delay(0.01, function() mouse1release() end) end)
+            end
+        else
+            Settings.LockedTarget = GetClosestTargetInFOV()
+        end
+    else
+        Settings.LockedTarget = GetClosestTargetInFOV()
+    end
+end)
+
+--==============================================================
+--  UTILITY LOGIC
+--==============================================================
+local infJumpEnabled = false
+local deathPosition = nil
+local deathReady = false
+local autoFixEnabled = false
+local nearDeathRespawn = false   -- пассивка "Возрождение около смерти"
+local respawnPending = false
+local NEAR_DEATH_RADIUS = 20
+
+local TP_DISTANCE = 12
+local TP_HOLD_TIME = 2.0
+local TP_MAX_ATTEMPTS = 5
+
+local keybinds = {}
+for userIdStr, keyName in pairs(Config.playerBinds) do
+    local kc = Enum.KeyCode[keyName]
+    if kc then keybinds[tonumber(userIdStr)] = kc end
+end
+
+local function getThreshold() return math.max(TP_DISTANCE + 2, 6) end
+
+local function clampDistance(v)
+    v = tonumber(v) or 12
+    v = math.floor(v)
+    if v < 0 then v = 0 end
+    if v > 500 then v = 500 end
+    return v
+end
+
+UserInputService.JumpRequest:Connect(function()
+    if infJumpEnabled then
+        local c = LocalPlayer.Character
+        if c and c:FindFirstChildOfClass("Humanoid") then
+            c:FindFirstChildOfClass("Humanoid"):ChangeState(Enum.HumanoidStateType.Jumping)
+        end
+    end
+end)
+
+local function setupCharacter(char)
+    local hum = char:WaitForChild("Humanoid")
+    local root = char:WaitForChild("HumanoidRootPart")
+    hum.Died:Connect(function()
+        deathPosition = root.Position + Vector3.new(0, 3, 0)
+        deathReady = true
+        respawnPending = true
+    end)
+end
+
+local function makeRayParams(char)
+    local p = RaycastParams.new()
+    if char then p.FilterDescendantsInstances = {char} end
+    p.FilterType = Enum.RaycastFilterType.Exclude
+    return p
+end
+
+local function isStuckAt(pos, char)
+    local rp = makeRayParams(char)
+    local dirs = {
+        Vector3.new(2, 0, 0), Vector3.new(-2, 0, 0),
+        Vector3.new(0, 2, 0), Vector3.new(0, -2, 0),
+        Vector3.new(0, 0, 2), Vector3.new(0, 0, -2),
+    }
+    local hits = 0
+    for _, d in ipairs(dirs) do
+        if Workspace:Raycast(pos, d, rp) then hits = hits + 1 end
+    end
+    return hits >= 5
+end
+
+local function findGroundAtXZ(x, z, fromY, char)
+    local rp = makeRayParams(char)
+    local hit = Workspace:Raycast(Vector3.new(x, fromY, z), Vector3.new(0, -2000, 0), rp)
+    if hit then return Vector3.new(x, hit.Position.Y + 3.5, z) end
+    return nil
+end
+
+local function findSafeSpotNear(targetPos, dist, char)
+    if dist <= 0 then
+        local g = findGroundAtXZ(targetPos.X, targetPos.Z, targetPos.Y + 200, char)
+        if g then return CFrame.new(g) end
+        return CFrame.new(targetPos)
+    end
+    local angles = {0, 22.5, 45, 67.5, 90, 112.5, 135, 157.5,
+                    180, 202.5, 225, 247.5, 270, 292.5, 315, 337.5}
+    local radii = { dist, dist * 0.7, dist * 1.3 }
+    local fromY = targetPos.Y + 500
+    for _, r in ipairs(radii) do
+        for _, ang in ipairs(angles) do
+            local rad = math.rad(ang)
+            local x = targetPos.X + math.cos(rad) * r
+            local z = targetPos.Z + math.sin(rad) * r
+            local gp = findGroundAtXZ(x, z, fromY, char)
+            if gp and not isStuckAt(gp, char) then return CFrame.new(gp) end
+        end
+    end
+    for _, dy in ipairs({5, 10, 20, 40}) do
+        local tp = targetPos + Vector3.new(0, dy, 0)
+        if not isStuckAt(tp, char) then return CFrame.new(tp) end
+    end
+    local g = findGroundAtXZ(targetPos.X, targetPos.Z, targetPos.Y + 200, char)
+    if g then return CFrame.new(g) end
+    return CFrame.new(targetPos)
+end
+
+local function isUnderMap(origin, char)
+    local rp = makeRayParams(char)
+    if Workspace:Raycast(origin, Vector3.new(0, -5, 0), rp) then return false end
+    local sides = {
+        Vector3.new(30, 0, 0), Vector3.new(-30, 0, 0),
+        Vector3.new(0, 0, 30), Vector3.new(0, 0, -30),
+    }
+    for _, d in ipairs(sides) do
+        if Workspace:Raycast(origin, d, rp) then return false end
+    end
+    local up = Workspace:Raycast(origin, Vector3.new(0, 1000, 0), rp)
+    if not up then return false end
+    if (up.Position - origin).Magnitude < 10 then return false end
+    return true
+end
+
+local function findEscapeUp(origin, char)
+    local y = 2
+    for _ = 1, 250 do
+        local tp = origin + Vector3.new(0, y, 0)
+        if not isStuckAt(tp, char) then return tp end
+        y = y + 2
+    end
+    return nil
+end
+
+local function fixUnderground()
+    local char = LocalPlayer.Character
+    if not char then return false, nil end
+    local root = char:FindFirstChild("HumanoidRootPart")
+    if not root then return false, nil end
+    local origin = root.Position
+    local stuck = isStuckAt(origin, char)
+    local under = isUnderMap(origin, char)
+    if not stuck and not under then return false, nil end
+    local tp = nil
+    if stuck then
+        tp = findEscapeUp(origin, char)
+    elseif under then
+        local rp = makeRayParams(char)
+        local up = Workspace:Raycast(origin, Vector3.new(0, 1000, 0), rp)
+        if up then tp = Vector3.new(origin.X, up.Position.Y + 3, origin.Z) end
+    end
+    if not tp then tp = origin + Vector3.new(0, 20, 0) end
+    local g = findGroundAtXZ(tp.X, tp.Z, tp.Y + 100, char)
+    if g then tp = g end
+    root.CFrame = CFrame.new(tp)
+    root.Velocity = Vector3.zero
+    root.AssemblyLinearVelocity = Vector3.zero
+    return true, (stuck and "stuck" or "under")
+end
+
+LocalPlayer.CharacterAdded:Connect(function(char)
+    setupCharacter(char)
+    if SpectateTarget and SpectateTarget.Character then
+        local h = SpectateTarget.Character:FindFirstChildOfClass("Humanoid")
+        if h then Camera.CameraSubject = h end
+    end
+    task.spawn(function()
+        task.wait(0.5) fixUnderground()
+        task.wait(1.0) fixUnderground()
+        task.wait(1.5) fixUnderground()
+    end)
+end)
+if LocalPlayer.Character then
+    setupCharacter(LocalPlayer.Character)
+    task.spawn(function()
+        task.wait(0.5) fixUnderground()
+        task.wait(1.0) fixUnderground()
+    end)
+end
+
+task.spawn(function()
+    while true do
+        task.wait(2)
+        if autoFixEnabled and LocalPlayer.Character then fixUnderground() end
+    end
+end)
+
+local function pinCharacter(char, root, cf)
+    pcall(function() char:PivotTo(cf) end)
+    root.CFrame = cf
+    root.Velocity = Vector3.zero
+    root.AssemblyLinearVelocity = Vector3.zero
+    root.RotVelocity = Vector3.zero
+    root.AssemblyAngularVelocity = Vector3.zero
+end
+
+local function holdPosition(getTargetCFrame, seconds, threshold)
+    seconds = seconds or TP_HOLD_TIME
+    threshold = threshold or getThreshold()
+    local char = LocalPlayer.Character
+    if not char then return false end
+    local root = char:FindFirstChild("HumanoidRootPart")
+    local hum = char:FindFirstChildOfClass("Humanoid")
+    if not root then return false end
+    if hum then
+        pcall(function()
+            hum:SetStateEnabled(Enum.HumanoidStateType.FallingDown, false)
+            hum:SetStateEnabled(Enum.HumanoidStateType.Ragdoll, false)
+            hum:SetStateEnabled(Enum.HumanoidStateType.Physics, false)
+            hum:ChangeState(Enum.HumanoidStateType.Running)
+        end)
+    end
+    local deadline = tick() + seconds
+    local ok = true
+    while tick() < deadline do
+        local target = getTargetCFrame()
+        if not target then ok = false break end
+        pinCharacter(char, root, target)
+        if (root.Position - target.Position).Magnitude > threshold * 3 then ok = false break end
+        RunService.Heartbeat:Wait()
+    end
+    if hum then
+        pcall(function()
+            hum:SetStateEnabled(Enum.HumanoidStateType.FallingDown, true)
+            hum:SetStateEnabled(Enum.HumanoidStateType.Ragdoll, true)
+            hum:SetStateEnabled(Enum.HumanoidStateType.Physics, true)
+        end)
+    end
+    return ok
+end
+
+local function teleportAndVerify(getTargetCFrame, holdTime, threshold, maxAttempts)
+    holdTime = holdTime or TP_HOLD_TIME
+    threshold = threshold or getThreshold()
+    maxAttempts = maxAttempts or TP_MAX_ATTEMPTS
+    local char = LocalPlayer.Character
+    if not char then return false end
+    local root = char:FindFirstChild("HumanoidRootPart")
+    if not root then return false end
+    for _ = 1, maxAttempts do
+        local cf = getTargetCFrame()
+        if not cf then return false end
+        pinCharacter(char, root, cf)
+        local ok = holdPosition(getTargetCFrame, holdTime, threshold)
+        task.wait(0.03)
+        local ft = getTargetCFrame()
+        if ft then
+            if (root.Position - ft.Position).Magnitude <= threshold then
+                fixUnderground(); return true
+            end
+        elseif ok then
+            fixUnderground(); return true
+        end
+    end
+    return false
+end
+
+local function teleportToPlayer(targetPlayer)
+    if targetPlayer == LocalPlayer then return false end
+    if not targetPlayer.Character then return false end
+    return teleportAndVerify(function()
+        local tChar = targetPlayer.Character
+        if not tChar then return nil end
+        local tRoot = tChar:FindFirstChild("HumanoidRootPart")
+        if not tRoot then return nil end
+        local safeCF = findSafeSpotNear(tRoot.Position, TP_DISTANCE, LocalPlayer.Character)
+        if safeCF then return safeCF end
+        return tRoot.CFrame
+    end, TP_HOLD_TIME, getThreshold(), TP_MAX_ATTEMPTS)
+end
+
+local function teleportToDeath()
+    if not deathReady or not deathPosition then return false end
+    local saved = deathPosition
+    return teleportAndVerify(function()
+        local g = findGroundAtXZ(saved.X, saved.Z, saved.Y + 200, LocalPlayer.Character)
+        if g then return CFrame.new(g) end
+        return CFrame.new(saved)
+    end, TP_HOLD_TIME, 6, TP_MAX_ATTEMPTS)
+end
+
+local function teleportToWaypoint(wp)
+    return teleportAndVerify(function()
+        local pos = Vector3.new(wp.x, wp.y, wp.z)
+        local g = findGroundAtXZ(pos.X, pos.Z, pos.Y + 200, LocalPlayer.Character)
+        if g then return CFrame.new(g) end
+        return CFrame.new(pos)
+    end, TP_HOLD_TIME, getThreshold(), TP_MAX_ATTEMPTS)
+end
+
+--==============================================================
+--  ВОЗРОЖДЕНИЕ ОКОЛО СМЕРТИ (пассивка)
+--==============================================================
+local function pickRandomSpotNear(center, radius, char)
+    for _ = 1, 20 do
+        local angle = math.random() * math.pi * 2
+        local dist  = radius * math.sqrt(math.random())
+        local x = center.X + math.cos(angle) * dist
+        local z = center.Z + math.sin(angle) * dist
+        local g = findGroundAtXZ(x, z, center.Y + 50, char)
+        if g and not isStuckAt(g, char) then
+            return CFrame.new(g)
+        end
+    end
+    return nil
+end
+
+LocalPlayer.CharacterAdded:Connect(function(char)
+    if not nearDeathRespawn or not respawnPending or not deathPosition then return end
+    respawnPending = false
+
+    local root = char:WaitForChild("HumanoidRootPart", 5)
+    if not root then return end
+    task.wait(0.3) -- даём игре закончить свой спавн
+
+    local cf = pickRandomSpotNear(deathPosition, NEAR_DEATH_RADIUS, char)
+    if not cf then return end
+
+    task.spawn(function()
+        local ok = teleportAndVerify(function() return cf end, 1.0, 6, 3)
+        Notify("Респавн", ok and "Возрождён рядом со смертью" or "Не удалось переместиться", 2)
+    end)
+end)
+
+--==============================================================
+--  SPECTATE LOGIC
+--==============================================================
+local function StopSpectate()
+    SpectateTarget = nil
+    local char = LocalPlayer.Character
+    local hum = char and char:FindFirstChildOfClass("Humanoid")
+    if hum then Camera.CameraSubject = hum end
+    if refreshSpectateList then refreshSpectateList() end
+end
+
+local function StartSpectate(player)
+    if not player or player == LocalPlayer then return end
+    local char = player.Character
+    if not char then return end
+    local hum = char:FindFirstChildOfClass("Humanoid")
+    if not hum then return end
+
+    SpectateTarget = player
+    Camera.CameraSubject = hum
+    Camera.CameraType = Enum.CameraType.Custom
+    if refreshSpectateList then refreshSpectateList() end
+end
+
+local function watchCharacterLife(player)
+    local char = player.Character
+    if not char then return end
+    local hum = char:FindFirstChildOfClass("Humanoid")
+    if hum then
+        hum.Died:Connect(function()
+            if SpectateTarget == player then StopSpectate() end
+        end)
+    end
+end
+
+--==============================================================
+--  UI — COMBAT
+--==============================================================
+CreateSection("ESP", PageCombat)
+CreateToggle("ESP Подсветка", Settings.ESP, function(v) Settings.ESP = v end, PageCombat)
+CreateToggle("Аимбот", Settings.Aimbot, function(v) Settings.Aimbot = v end, PageCombat)
+CreateToggle("Авто-Стрельба", Settings.AutoShoot, function(v) Settings.AutoShoot = v end, PageCombat)
+
+CreateSection("Цель", PageCombat, Palette.ACCENT_BRIGHT)
+local TargetBtn = CreateActionButton(
+    "Цель: " .. (Settings.TargetPart == "Head" and "Голова" or "Тело"),
+    Palette.ACCENT, PageCombat,
+    function()
+        if Settings.TargetPart == "Head" then
+            Settings.TargetPart = "HumanoidRootPart"
+        else
+            Settings.TargetPart = "Head"
+        end
+        TargetBtn.Text = "Цель: " .. (Settings.TargetPart == "Head" and "Голова" or "Тело")
+    end)
+
+CreateSection("Бинды", PageCombat, Palette.VIOLET)
+CreateBindButton("Аимбот (удерж.)",
+    function() return Settings.AimbotBind end,
+    function(bind) Settings.AimbotBind = bind end, PageCombat)
+CreateBindButton("Авто-фиксация (toggle)",
+    function() return Settings.AutoLockBind end,
+    function(bind) Settings.AutoLockBind = bind end, PageCombat)
+
+CreateSection("FOV", PageCombat, Palette.SUCCESS)
+CreateSlider("Размер FOV", 10, 300, Settings.FOVRadius, PageCombat, function(v)
+    Settings.FOVRadius = v
+end)
+
+--==============================================================
+--  UI — UTILITY
+--==============================================================
+CreateSection("Прыжок", PageUtility)
+local InfJumpBtn
+InfJumpBtn = CreateToggle("Inf Jump", false, function(v)
+    infJumpEnabled = v
+end, PageUtility)
+
+CreateSection("Телепорты", PageUtility, Palette.SUCCESS)
+local DeathBtn = CreateActionButton("TP to Death (нет данных)", Palette.WARN, PageUtility, function()
+    if not deathReady then
+        Notify("TP to Death", "Точка смерти ещё не зафиксирована", 2)
+        return
+    end
+    Notify("TP to Death", "Телепорт...", 1.5)
+    task.spawn(function()
+        local ok = teleportToDeath()
+        Notify("TP to Death", ok and "Успешно" or "Провал", 2)
+    end)
+end)
+
+CreateSection("Дистанция TP", PageUtility)
+CreateSlider("Дистанция", 0, 500, TP_DISTANCE, PageUtility, function(v)
+    TP_DISTANCE = clampDistance(v)
+end)
+
+CreateSection("Пассивки", PageUtility, Palette.VIOLET)
+CreateToggle("Возрождение около смерти", false, function(v)
+    nearDeathRespawn = v
+end, PageUtility)
+CreateSlider("Радиус возрождения", 5, 100, NEAR_DEATH_RADIUS, PageUtility, function(v)
+    NEAR_DEATH_RADIUS = v
+end)
+
+CreateSection("Восстановление позиции", PageUtility, Palette.VIOLET)
+CreateActionButton("Fix Underground", Palette.ACCENT, PageUtility, function()
+    local fixed, reason = fixUnderground()
+    Notify("Fix", fixed and ("Исправлено (" .. (reason or "?") .. ")") or "Ты в порядке", 2)
+end)
+
+CreateToggle("Auto-Fix", false, function(v) autoFixEnabled = v end, PageUtility)
+
+CreateSection("Сервер", PageUtility, Palette.DANGER)
+CreateActionButton("Rejoin Server", Palette.WARN, PageUtility, function()
+    if ScriptUnloaded then return end
+    Notify("Rejoin", "Переподключение...", 2)
+    task.spawn(function()
+        if game.JobId and game.JobId ~= "" then
+            pcall(function()
+                TeleportService:TeleportToPlaceInstance(game.PlaceId, game.JobId, LocalPlayer)
+            end)
+        else
+            pcall(function()
+                TeleportService:Teleport(game.PlaceId, LocalPlayer)
+            end)
+        end
+    end)
+end)
+
+--==============================================================
+--  UI — PLAYERS (динамический список)
+--==============================================================
+local function isCapturing(type, id)
+    if not capturingBindingFor then return false end
+    if capturingBindingFor.type ~= type then return false end
+    if type == "player" then return capturingBindingFor.userId == id end
+    if type == "waypoint" then return capturingBindingFor.index == id end
+    return false
+end
+
+local refreshWaypoints -- forward declaration (используется в обработчике ввода)
+
+local function refreshPlayerList()
+    for _, ch in ipairs(PagePlayers:GetChildren()) do
+        if ch:IsA("Frame") or ch:IsA("TextLabel") then ch:Destroy() end
+    end
+
+    local header = Instance.new("TextLabel", PagePlayers)
+    header.Size = UDim2.new(1, 0, 0, 18)
+    header.BackgroundTransparency = 1
+    header.Font = Enum.Font.GothamBold
+    header.TextSize = 10
+    header.TextColor3 = Palette.TEXT_MUTED
+    header.TextXAlignment = Enum.TextXAlignment.Left
+    header.Text = "ИГРОКИ  •  клик = TP  |  + = бинд"
+
+    for _, p in ipairs(Players:GetPlayers()) do
+        if p ~= LocalPlayer then
+            local row = Instance.new("Frame", PagePlayers)
+            row.Name = p.Name
+            row.Size = UDim2.new(1, 0, 0, 30)
+            row.BackgroundColor3 = Palette.BG_ROW
+            row.BorderSizePixel = 0
+            applyCorner(row, 6)
+
+            local btn = Instance.new("TextButton", row)
+            btn.BackgroundColor3 = Palette.BG_BUTTON
+            btn.BorderSizePixel = 0
+            btn.Size = UDim2.new(1, -36, 1, -4)
+            btn.Position = UDim2.new(0, 2, 0, 2)
+            btn.Font = Enum.Font.Gotham
+            btn.TextSize = 11
+            btn.TextColor3 = Palette.TEXT
+            btn.Text = p.DisplayName .. " (@" .. p.Name .. ")"
+            btn.TextTruncate = Enum.TextTruncate.AtEnd
+            btn.AutoButtonColor = false
+            applyCorner(btn, 5)
+
+            local bindBtn = Instance.new("TextButton", row)
+            bindBtn.BackgroundColor3 = Palette.BG_BUTTON
+            bindBtn.BorderSizePixel = 0
+            bindBtn.Size = UDim2.new(0, 30, 1, -4)
+            bindBtn.Position = UDim2.new(1, -33, 0, 2)
+            bindBtn.Font = Enum.Font.GothamBold
+            bindBtn.TextSize = 10
+            bindBtn.TextColor3 = Palette.TEXT_DIM
+            bindBtn.AutoButtonColor = false
+            applyCorner(bindBtn, 5)
+
+            local savedKey = keybinds[p.UserId]
+            if isCapturing("player", p.UserId) then
+                bindBtn.Text = "..."
+                bindBtn.TextColor3 = Palette.WARN
+            elseif savedKey then
+                bindBtn.Text = savedKey.Name
+                bindBtn.TextColor3 = Palette.SUCCESS
+            else
+                bindBtn.Text = "+"
+            end
+
+            btn.MouseButton1Click:Connect(function()
+                if capturingBindingFor then return end
+                btn.Text = "Teleport... " .. p.Name
+                btn.TextColor3 = Palette.WARN
+                task.spawn(function()
+                    local ok = teleportToPlayer(p)
+                    btn.Text = (ok and "✔ " or "✖ ") .. p.DisplayName
+                    btn.TextColor3 = ok and Palette.SUCCESS or Palette.DANGER
+                    task.wait(1.0)
+                    if btn.Parent then
+                        btn.Text = p.DisplayName .. " (@" .. p.Name .. ")"
+                        btn.TextColor3 = Palette.TEXT
+                    end
+                end)
+            end)
+
+            bindBtn.MouseButton1Click:Connect(function()
+                if isCapturing("player", p.UserId) then
+                    capturingBindingFor = nil
+                else
+                    capturingBindingFor = { type = "player", userId = p.UserId }
+                end
+                refreshPlayerList()
+            end)
+        end
+    end
+end
+
+Players.PlayerAdded:Connect(function() task.wait(0.3) refreshPlayerList() end)
+Players.PlayerRemoving:Connect(function() task.wait(0.1) refreshPlayerList() end)
+refreshPlayerList()
+
+--==============================================================
+--  UI — WAYPOINTS
+--==============================================================
+local WPNameInput = nil
+
+refreshWaypoints = function()
+    for _, ch in ipairs(PageWaypoints:GetChildren()) do
+        if ch:IsA("Frame") or ch:IsA("TextLabel") then
+            if ch.Name ~= "WPKeep" then ch:Destroy() end
+        end
+    end
+
+    local header = Instance.new("TextLabel", PageWaypoints)
+    header.Size = UDim2.new(1, 0, 0, 18)
+    header.BackgroundTransparency = 1
+    header.Font = Enum.Font.GothamBold
+    header.TextSize = 10
+    header.TextColor3 = Palette.TEXT_MUTED
+    header.TextXAlignment = Enum.TextXAlignment.Left
+    header.Text = "СОХРАНЁННЫЕ ТОЧКИ"
+
+    for i, wp in ipairs(Config.waypoints) do
+        local row = Instance.new("Frame", PageWaypoints)
+        row.Name = "WP_" .. i
+        row.Size = UDim2.new(1, 0, 0, 30)
+        row.BackgroundColor3 = Palette.BG_ROW
+        row.BorderSizePixel = 0
+        applyCorner(row, 6)
+
+        local btn = Instance.new("TextButton", row)
+        btn.BackgroundColor3 = Palette.BG_BUTTON
+        btn.BorderSizePixel = 0
+        btn.Size = UDim2.new(1, -66, 1, -4)
+        btn.Position = UDim2.new(0, 2, 0, 2)
+        btn.Font = Enum.Font.Gotham
+        btn.TextSize = 11
+        btn.TextColor3 = Palette.TEXT
+        btn.Text = wp.name
+        btn.TextTruncate = Enum.TextTruncate.AtEnd
+        btn.AutoButtonColor = false
+        applyCorner(btn, 5)
+
+        local bindBtn = Instance.new("TextButton", row)
+        bindBtn.BackgroundColor3 = Palette.BG_BUTTON
+        bindBtn.BorderSizePixel = 0
+        bindBtn.Size = UDim2.new(0, 30, 1, -4)
+        bindBtn.Position = UDim2.new(1, -63, 0, 2)
+        bindBtn.Font = Enum.Font.GothamBold
+        bindBtn.TextSize = 10
+        bindBtn.TextColor3 = Palette.TEXT_DIM
+        bindBtn.AutoButtonColor = false
+        applyCorner(bindBtn, 5)
+
+        local delBtn = Instance.new("TextButton", row)
+        delBtn.BackgroundColor3 = Color3.fromRGB(60, 20, 20)
+        delBtn.BorderSizePixel = 0
+        delBtn.Size = UDim2.new(0, 30, 1, -4)
+        delBtn.Position = UDim2.new(1, -31, 0, 2)
+        delBtn.Font = Enum.Font.GothamBold
+        delBtn.TextSize = 11
+        delBtn.Text = "✖"
+        delBtn.TextColor3 = Palette.DANGER
+        delBtn.AutoButtonColor = false
+        applyCorner(delBtn, 5)
+
+        local kc = wp.key and Enum.KeyCode[wp.key]
+        if isCapturing("waypoint", i) then
+            bindBtn.Text = "..."
+            bindBtn.TextColor3 = Palette.WARN
+        elseif kc then
+            bindBtn.Text = kc.Name
+            bindBtn.TextColor3 = Palette.SUCCESS
+        else
+            bindBtn.Text = "+"
+        end
+
+        btn.MouseButton1Click:Connect(function()
+            if capturingBindingFor then return end
+            task.spawn(function()
+                local ok = teleportToWaypoint(wp)
+                Notify("Waypoint", (ok and "TP → " or "Fail → ") .. wp.name, 1.5)
+            end)
+        end)
+
+        bindBtn.MouseButton1Click:Connect(function()
+            if isCapturing("waypoint", i) then
+                capturingBindingFor = nil
+            else
+                capturingBindingFor = { type = "waypoint", index = i }
+            end
+            refreshWaypoints()
+        end)
+
+        delBtn.MouseButton1Click:Connect(function()
+            table.remove(Config.waypoints, i)
+            saveConfig()
+            refreshWaypoints()
+        end)
+    end
+end
+
+-- Add-waypoint UI (сверху)
+local AddWPBox = CreateTextInput("Имя точки...", PageWaypoints)
+WPNameInput = AddWPBox
+AddWPBox.LayoutOrder = -3
+
+local AddWPButton = CreateActionButton("+ Сохранить здесь", Palette.VIOLET, PageWaypoints, function()
+    local char = LocalPlayer.Character
+    if not char then Notify("Waypoint", "Нет персонажа", 2); return end
+    local root = char:FindFirstChild("HumanoidRootPart")
+    if not root then return end
+
+    local name = WPNameInput.Text
+    if name == "" then name = "WP_" .. tostring(#Config.waypoints + 1) end
+
+    local pos = root.Position
+    table.insert(Config.waypoints, {
+        name = name, x = pos.X, y = pos.Y, z = pos.Z, key = nil,
+    })
+    saveConfig()
+    WPNameInput.Text = ""
+    refreshWaypoints()
+    Notify("Waypoint", "Сохранено: " .. name, 2)
+end)
+AddWPButton.LayoutOrder = -2
+
+refreshWaypoints()
+
+--==============================================================
+--  UI — FRIENDS
+--==============================================================
+local function RefreshFriendsList()
+    for _, ch in ipairs(PageFriends:GetChildren()) do
+        if ch:IsA("Frame") or ch:IsA("TextLabel") then ch:Destroy() end
+    end
+
+    local header = Instance.new("TextLabel", PageFriends)
+    header.Size = UDim2.new(1, 0, 0, 18)
+    header.BackgroundTransparency = 1
+    header.Font = Enum.Font.GothamBold
+    header.TextSize = 10
+    header.TextColor3 = Palette.TEXT_MUTED
+    header.TextXAlignment = Enum.TextXAlignment.Left
+    header.Text = "ДРУЗЬЯ (зелёные в ESP, не трогает Aimbot)"
+
+    for _, plr in pairs(Players:GetPlayers()) do
+        if plr ~= LocalPlayer then
+            local row = Instance.new("Frame", PageFriends)
+            row.Size = UDim2.new(1, 0, 0, 30)
+            row.BackgroundColor3 = Palette.BG_ROW
+            row.BorderSizePixel = 0
+            applyCorner(row, 6)
+
+            local lbl = Instance.new("TextLabel", row)
+            lbl.BackgroundTransparency = 1
+            lbl.Size = UDim2.new(1, -70, 1, 0)
+            lbl.Position = UDim2.new(0, 10, 0, 0)
+            lbl.Font = Enum.Font.GothamBold
+            lbl.TextSize = 11
+            lbl.TextXAlignment = Enum.TextXAlignment.Left
+            lbl.TextTruncate = Enum.TextTruncate.AtEnd
+            lbl.TextColor3 = Settings.Friends[plr.UserId] and Palette.SUCCESS or Palette.TEXT_DIM
+            lbl.Text = plr.DisplayName .. " (@" .. plr.Name .. ")"
+
+            local b = Instance.new("TextButton", row)
+            b.Size = UDim2.new(0, 60, 0, 22)
+            b.Position = UDim2.new(1, -66, 0.5, -11)
+            b.BorderSizePixel = 0
+            b.Font = Enum.Font.GothamBold
+            b.TextSize = 10
+            b.TextColor3 = Palette.TEXT
+            b.Text = Settings.Friends[plr.UserId] and "Friend" or "Add"
+            b.BackgroundColor3 = Settings.Friends[plr.UserId] and Palette.SUCCESS or Palette.BG_BUTTON
+            b.AutoButtonColor = false
+            applyCorner(b, 4)
+
+            b.MouseButton1Click:Connect(function()
+                if Settings.Friends[plr.UserId] then
+                    Settings.Friends[plr.UserId] = nil
+                else
+                    Settings.Friends[plr.UserId] = true
+                end
+                RefreshFriendsList()
+            end)
+        end
+    end
+end
+
+Players.PlayerAdded:Connect(function() task.wait(0.2) RefreshFriendsList() end)
+Players.PlayerRemoving:Connect(function() task.wait(0.1) RefreshFriendsList() end)
+RefreshFriendsList()
+
+--==============================================================
+--  UI — SPECTATE
+--==============================================================
+local SpectateStatus = nil
+local SpectateStopBtn = nil
+
+refreshSpectateList = function()
+    for _, ch in ipairs(PageSpectate:GetChildren()) do
+        if ch:IsA("Frame") or ch:IsA("TextLabel") or ch:IsA("TextButton") then
+            ch:Destroy()
+        end
+    end
+
+    SpectateStatus = Instance.new("TextLabel", PageSpectate)
+    SpectateStatus.Size = UDim2.new(1, 0, 0, 18)
+    SpectateStatus.BackgroundTransparency = 1
+    SpectateStatus.Font = Enum.Font.GothamBold
+    SpectateStatus.TextSize = 11
+    SpectateStatus.TextXAlignment = Enum.TextXAlignment.Left
+    SpectateStatus.TextColor3 = SpectateTarget and Palette.SUCCESS or Palette.TEXT_MUTED
+    SpectateStatus.Text = SpectateTarget and ("Следим: " .. SpectateTarget.DisplayName) or "Никто не выбран"
+
+    SpectateStopBtn = Instance.new("TextButton", PageSpectate)
+    SpectateStopBtn.Size = UDim2.new(1, 0, 0, 28)
+    SpectateStopBtn.BackgroundColor3 = Color3.fromRGB(60, 25, 25)
+    SpectateStopBtn.BorderSizePixel = 0
+    SpectateStopBtn.Font = Enum.Font.GothamBold
+    SpectateStopBtn.TextSize = 11
+    SpectateStopBtn.Text = "Stop Watching"
+    SpectateStopBtn.TextColor3 = Palette.DANGER
+    SpectateStopBtn.AutoButtonColor = false
+    applyCorner(SpectateStopBtn, 6)
+    applyStroke(SpectateStopBtn, Palette.DANGER, 1, 0.4)
+    SpectateStopBtn.Visible = SpectateTarget ~= nil
+    SpectateStopBtn.MouseButton1Click:Connect(function()
+        StopSpectate()
+        Notify("Наблюдение", "Остановлено", 1.5)
+    end)
+
+    local header = Instance.new("TextLabel", PageSpectate)
+    header.Size = UDim2.new(1, 0, 0, 16)
+    header.BackgroundTransparency = 1
+    header.Font = Enum.Font.GothamBold
+    header.TextSize = 10
+    header.TextColor3 = Palette.TEXT_MUTED
+    header.TextXAlignment = Enum.TextXAlignment.Left
+    header.Text = "КЛИК ПО ИГРОКУ — СМОТРЕТЬ"
+
+    for _, p in ipairs(Players:GetPlayers()) do
+        if p ~= LocalPlayer then
+            local row = Instance.new("Frame", PageSpectate)
+            row.Size = UDim2.new(1, 0, 0, 28)
+            row.BackgroundColor3 = Palette.BG_ROW
+            row.BorderSizePixel = 0
+            applyCorner(row, 6)
+
+            local active = (SpectateTarget == p)
+            local b = Instance.new("TextButton", row)
+            b.Size = UDim2.new(1, -4, 1, -4)
+            b.Position = UDim2.new(0, 2, 0, 2)
+            b.BackgroundColor3 = active and Color3.fromRGB(70, 45, 20) or Palette.BG_BUTTON
+            b.BorderSizePixel = 0
+            b.Font = Enum.Font.Gotham
+            b.TextSize = 11
+            b.TextColor3 = active and Palette.WARN or Palette.TEXT
+            b.Text = p.DisplayName .. " (@" .. p.Name .. ")"
+            b.TextTruncate = Enum.TextTruncate.AtEnd
+            b.AutoButtonColor = false
+            applyCorner(b, 5)
+
+            b.MouseButton1Click:Connect(function()
+                if SpectateTarget == p then
+                    StopSpectate()
+                else
+                    if not p.Character then return end
+                    StartSpectate(p)
+                    watchCharacterLife(p)
+                    Notify("Наблюдение", "Смотрим: " .. p.DisplayName, 1.5)
+                end
+            end)
+        end
+    end
+end
+
+Players.PlayerAdded:Connect(function(p)
+    task.wait(0.3)
+    refreshSpectateList()
+    p.CharacterAdded:Connect(function()
+        if SpectateTarget == p then
+            task.wait(0.2)
+            local hum = p.Character and p.Character:FindFirstChildOfClass("Humanoid")
+            if hum then Camera.CameraSubject = hum end
+            watchCharacterLife(p)
+        end
+    end)
+end)
+Players.PlayerRemoving:Connect(function(p)
+    if SpectateTarget == p then StopSpectate() end
+    task.wait(0.1)
+    refreshSpectateList()
+end)
+
+refreshSpectateList()
+
+--==============================================================
+--  VISIBILITY
+--==============================================================
+local function ToggleUI()
+    Settings.UIVisible = not Settings.UIVisible
+    MainFrame.Visible = Settings.UIVisible
+    NotifHolder.Visible = Settings.UIVisible
+end
+
+--==============================================================
+--  INPUT
+--==============================================================
+local InputConn
+InputConn = UserInputService.InputBegan:Connect(function(input, gpe)
+    -- 1) Ожидание бинда
+    if WaitingBind then
+        local validMouse = input.UserInputType == Enum.UserInputType.MouseButton1
+            or input.UserInputType == Enum.UserInputType.MouseButton2
+            or input.UserInputType == Enum.UserInputType.MouseButton3
+        local newBind
+        if input.UserInputType == Enum.UserInputType.Keyboard then
+            newBind = input.KeyCode
+        elseif validMouse then
+            newBind = input.UserInputType
+        else
+            return
+        end
+        WaitingBind.Set(newBind)
+        local lbl = WaitingBind.Button:FindFirstChildOfClass("TextLabel")
+        if lbl then lbl.Text = WaitingBind.Label .. ": " .. GetBindName(newBind) end
+        WaitingBind.Button.BackgroundColor3 = Palette.BG_BUTTON
+        WaitingBind = nil
+        return
+    end
+
+    -- 2) Захват бинда
+    if capturingBindingFor then
+        if input.UserInputType == Enum.UserInputType.Keyboard then
+            local keyName = (input.KeyCode == Enum.KeyCode.Escape) and nil or input.KeyCode.Name
+            if capturingBindingFor.type == "player" then
+                local uid = capturingBindingFor.userId
+                if keyName then
+                    keybinds[uid] = input.KeyCode
+                    Config.playerBinds[tostring(uid)] = keyName
+                else
+                    keybinds[uid] = nil
+                    Config.playerBinds[tostring(uid)] = nil
+                end
+                saveConfig()
+                capturingBindingFor = nil
+                task.defer(refreshPlayerList)
+            elseif capturingBindingFor.type == "waypoint" then
+                local idx = capturingBindingFor.index
+                if Config.waypoints[idx] then
+                    Config.waypoints[idx].key = keyName
+                end
+                saveConfig()
+                capturingBindingFor = nil
+                task.defer(refreshWaypoints)
+            end
+        elseif input.UserInputType == Enum.UserInputType.MouseButton2 then
+            capturingBindingFor = nil
+            task.defer(function() refreshPlayerList(); refreshWaypoints() end)
+        end
+        return
+    end
+
+    if gpe then return end
+
+    -- 3) Аимбот / автолок
+    if input.KeyCode == Settings.AimbotBind or input.UserInputType == Settings.AimbotBind then
+        Settings.IsAimbotHeld = true
+        Settings.LockedTarget = GetClosestTargetInFOV()
+        return
+    end
+    if input.KeyCode == Settings.AutoLockBind or input.UserInputType == Settings.AutoLockBind then
+        Settings.AutoLock0 = not Settings.AutoLock0
+        Settings.LockedTarget = Settings.AutoLock0 and GetClosestTargetInFOV() or nil
+        return
+    end
+
+    -- 4) Insert / Delete
+    if input.KeyCode == Enum.KeyCode.Insert then
+        ToggleUI()
+        return
+    elseif input.KeyCode == Enum.KeyCode.Delete then
+        ScriptUnloaded = true
+        SpectateTarget = nil
+        if RenderConn then RenderConn:Disconnect() end
+        if ESPConn then ESPConn:Disconnect() end
+        if AimConn then AimConn:Disconnect() end
+        if InputConn then InputConn:Disconnect() end
+        pcall(function() FOVCircle:Remove() end)
+        ScreenGui:Destroy()
+        for _, p in pairs(Players:GetPlayers()) do
+            if p.Character then
+                if p.Character:FindFirstChild("BloodZone_ESP") then
+                    p.Character.BloodZone_ESP:Destroy()
+                end
+                local head = p.Character:FindFirstChild("Head")
+                if head and head:FindFirstChild("BloodZone_Tag") then
+                    head.BloodZone_Tag:Destroy()
+                end
+            end
+        end
+        return
+    end
+
+    -- 5) Бинды игроков и WP
+    if input.UserInputType == Enum.UserInputType.Keyboard and not UserInputService:GetFocusedTextBox() then
+        for userId, key in pairs(keybinds) do
+            if key == input.KeyCode then
+                local p = Players:GetPlayerByUserId(userId)
+                if p and p.Character then
+                    task.spawn(function() teleportToPlayer(p) end)
+                end
+                break
+            end
+        end
+        for _, wp in ipairs(Config.waypoints) do
+            if wp.key then
+                local kc = Enum.KeyCode[wp.key]
+                if kc and kc == input.KeyCode then
+                    task.spawn(function() teleportToWaypoint(wp) end)
+                    break
+                end
+            end
+        end
+    end
+end)
+
+UserInputService.InputEnded:Connect(function(input)
+    if input.KeyCode == Settings.AimbotBind or input.UserInputType == Settings.AimbotBind then
+        Settings.IsAimbotHeld = false
+        if not Settings.AutoLock0 then Settings.LockedTarget = nil end
+    end
+end)
+
+--==============================================================
+--  BUTTONS
+--==============================================================
+DestroyBtn.MouseButton1Click:Connect(function()
+    ScriptUnloaded = true
+    SpectateTarget = nil
+    if RenderConn then RenderConn:Disconnect() end
+    if ESPConn then ESPConn:Disconnect() end
+    if AimConn then AimConn:Disconnect() end
+    if InputConn then InputConn:Disconnect() end
+    pcall(function() FOVCircle:Remove() end)
+    pcall(function() ScreenGui:Destroy() end)
+end)
+
+local minimized = false
+MinimizeBtn.MouseButton1Click:Connect(function()
+    minimized = not minimized
+    Sidebar.Visible = not minimized
+    ContentArea.Visible = not minimized
+    MainFrame.Size = minimized and UDim2.new(0, 660, 0, 44) or UDim2.new(0, 660, 0, 500)
+end)
+
+--==============================================================
+--  AUTO-REJOIN
+--==============================================================
+local REJOIN_PLACE_ID = game.PlaceId
+local REJOIN_JOB_ID   = game.JobId
+
+if canSave then
+    Config.lastPlaceId = REJOIN_PLACE_ID
+    Config.lastJobId   = REJOIN_JOB_ID
+    saveConfig()
+end
+
+local rejoinInProgress = false
+local function RejoinSameServer()
+    if ScriptUnloaded then return end
+    if rejoinInProgress then return end
+    rejoinInProgress = true
+    if REJOIN_JOB_ID and REJOIN_JOB_ID ~= "" then
+        local ok = pcall(function()
+            TeleportService:TeleportToPlaceInstance(REJOIN_PLACE_ID, REJOIN_JOB_ID, LocalPlayer)
+        end)
+        if ok then return end
+    end
+    pcall(function()
+        TeleportService:Teleport(REJOIN_PLACE_ID, LocalPlayer)
+    end)
+end
+
+LocalPlayer.AncestryChanged:Connect(function(_, parent)
+    if parent == nil and not ScriptUnloaded then
+        task.spawn(function()
+            task.wait(0.15)
+            RejoinSameServer()
+        end)
+    end
+end)
+
+--==============================================================
+--  ДОК
+--==============================================================
+Notify("Blood Zone V8", "Загружено. Insert — показать/скрыть UI.", 3)
